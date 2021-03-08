@@ -15,7 +15,7 @@ In order to do so we carried out FACS sorted scRNAseq to select the stromal comp
 In parallel, we also carried out Visium spatial transcriptomcs experiments to understand the spatial organization of these different tumors. We mainly focused on gene marker characterization in the tissue and the different compartments and we also mapped the single-cell signatures to the tissue to also quantify cell-type proportions in the different regions. 
 
 # Software versions
-All analysis were run using R 4.0.1 and Python 3.6.0
+All analysis were run using `R 4.0.1` and `Python 3.6.0`.
 Main packages and versions used throughout all the analysis:
 * [tidyverse 1.3.0](https://cran.r-project.org/web/packages/tidyverse/vignettes/paper.html)
 * [cowplot 1.1.1](https://cran.r-project.org/web/packages/cowplot/index.html)
