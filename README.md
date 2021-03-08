@@ -1,0 +1,5 @@
+# EPID
+This is a project in which we are interested in analyzing how the stromal fraction of a tumor changes depending on the diet.
+In short, xenografts of human tumoral cells are implanted in mouse tongues. These mice are then administered one of: control diet, olive oil rich diet or palm oil rich diet. The diet is kept during 35 days and after the mice are sacrificed and the tumoral cells that have been developing are implanted in new mice. This new generation of mice is put on the control diet and what we want to observe is how the tumor evolves depending on the prior diet *See if tumor cells have memory of past events*.
+
+In order to do so we carried out FACS sorted scRNAseq to select the neural-like part of the stroma. Parallely, we also carried out Visium experiments to understand the spatial organization of these different tumors. 
