@@ -1,0 +1,5 @@
+subproject,gem_id,library_id,type,donor_id,index,slide,area
+EPID_27,uzntl1_fkclxp,AQ9847,visium,GP027_PKLO_Palm_Diet,SI-TT-A5,V19S23-040,A1
+EPID_27,k886qc_rqix54,AQ9847,visium,GP029_PLKO_CT_Diet,SI-TT-A6,V19S23-040,B1
+EPID_27,ivuznh_s8xyfv,AQ9847,visium,GP20004_dKDCD36_CT_Diet,SI-TT-A7,V19S23-040,C1
+EPID_27,s2yq8o_t5hk8u,AQ9847,visium,GP024_dKDCD36_Palm_Diet,SI-TT-A8,V19S23-040,D1
