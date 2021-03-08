@@ -1,5 +1,4 @@
-# Dietary palmitic acid promotes a prometastatic epigenetic memory related to tumor-
-associated Schwann cell activation
+# Dietary palmitic acid promotes a prometastatic epigenetic memory related to tumor-associated Schwann cell activation
 
 ## Abstract
 Metastasis is promoted by fatty acid (FA) uptake and metabolism 1-2 . How this works, or whether all dietary FAs are prometastatic, is not known. Here we show that dietary palmitic acid (PA), but not oleic acid (OA) or linoleic acid, promotes metastasis in oral carcinomas and melanoma, indicating specificity of action for distinct FAs. Strikingly, tumours acutely exposed to a PA–rich diet remain highly metastatic even when serially transplanted. This PA–induced prometastatic memory requires the FA transporter CD36 as well as the epigenetically stable deposition of histone H3 lysine 4 trimethylation by the methyltransferase Set1A/COMPASS. Bulk, single cell and positional RNA sequencing indicate that genes with this metastatic memory predominantly relate to a neural
