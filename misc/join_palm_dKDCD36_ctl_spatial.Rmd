@@ -1,0 +1,222 @@
+---
+title: "Join dKDCD36 slides"
+author: "Marc Elosua-Bayes"
+date: "12/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+In this Rmarkdown document we are going to combine both spatial datasets to be able to visualize them in the shiny app at the same time.
+
+## Libraries
+```{r warning = FALSE, message = FALSE}
+library(dplyr)
+library(Seurat)
+library(glue)
+library(ggplot2)
+```
+
+## Parameters
+Here we will define and load objects and functions that will be used throughout the document.
+```{r}
+source(here::here("utils/bin.R"))
+source(here::here("misc/paths.R"))
+```
+
+The `seurat2shiny` function can be found in the teams GitHub repository [shiny-annotation](https://github.com/Single-Cell-Genomics-Group-CNAG-CRG/shiny-annotation/blob/main/seurat2shiny.R).
+```{r}
+seurat2shiny = function(
+    object                         ,
+    tech      = c("sc", "sp")      ,
+    assay     = object@active.assay,
+    slot      = "data"             ,
+    reduction = "umap"             ,
+    image     = NULL               ,
+    asfactors = NULL               ,
+    save      = FALSE               ,
+    path      = "."                  # path = getwd()
+) {
+    suppressMessages( library(Seurat) );
+
+    # Input check.
+    if ( ! is(object, "Seurat") )
+        stop("'object' is not a Seurat object.");
+
+    if ( ! assay %in% Seurat::Assays(object) )
+        stop("'assay' not in the Seurat object's available assays.");
+
+    if ( tech == "sc" & ! (reduction %in% names(object@reductions)) )
+        stop("'reduction' not in the Seurat object's available reductions.");
+
+    if ( ! slot %in% c("counts", "data", "scale.data") )
+        stop("'slot' not in the Seurat object's available slots.");
+    
+    if ( ! tech %in% c("sc", "sp") )
+        stop("tech must be sc or sp.");
+    
+    
+    # Check Which technology it is processing
+    if (tech == "sc") {
+        # Extract 2D coordinates.
+        embeds <- as.data.frame(object@reductions[[reduction]]@cell.embeddings);
+        names(embeds) <- c("coord_x", "coord_y");
+    } else if (tech == "sp") {
+        # If the image is null select the first one
+        if (is.null(image)) {
+            image <- names(object@images)[1]
+            warning(sprintf("image is not set, we will use %s", image))
+        } 
+        
+        embeds <- data.frame(object@images[[image]]@coordinates[, c("imagerow", "imagecol")])
+        colnames(embeds) <- c("coord_y", "coord_x");
+        
+        # Inverse coord_y
+        embeds$coord_y <- - embeds$coord_y
+    }
+    
+
+    # Join metadata with coordinates.
+    metadata <- object@meta.data;
+
+    for (col in asfactors) {
+        metadata[[col]] <- as.factor(metadata[[col]]);
+    };
+
+    metadata <- merge(x = metadata, y = embeds, by = "row.names");
+    names(metadata)[1] <-  "barcode"; # names(metadata)[names(metadata) == "Row.names"] = "barcode";
+    rownames(metadata) <- metadata$barcode
+
+    # Extract expression data.
+    # expression = as.matrix( Seurat::GetAssayData(object = object, slot = slot, assay = assay) );
+    expression = Seurat::GetAssayData(object = object, slot = slot, assay = assay);
+
+    if ( ! identical( as.character(metadata$barcode), colnames(expression) ) )
+        warning("Cells in metadata and expression matrix do not match.");
+
+    if (save) {
+        saveRDS( object = metadata  , file = paste0(path, "/metadata.rds"  ) );
+        saveRDS( object = expression, file = paste0(path, "/expression.rds") );
+    };
+
+    invisible(
+        list(metadata = metadata, expression = expression)
+    );
+}
+```
+
+
+## Load data
+The data used in this Rmarkdown document comes from...
+```{r}
+# palm_obj <- readRDS(file = here::here(glue::glue("{anot_27}/{robj_dir}/clust_se_s2yq8o_t5hk8u.RDS")))
+palm_obj <- "{map_27}/{robj_dir}/se_deconv_s2yq8o_t5hk8u_epid20.rds" %>%
+# "{map_27}/{robj_dir}/se_deconv_{sample_id}.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# ct_obj <- readRDS(file = here::here(glue::glue("{anot_27}/{robj_dir}/clust_se_ivuznh_s8xyfv.RDS")))
+ct_obj <- "{map_27}/{robj_dir}/se_deconv_ivuznh_s8xyfv_epid20.rds" %>%
+# "{map_27}/{robj_dir}/se_deconv_{sample_id}.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+```
+
+## Analysis
+1st we are going to generate the expression and metadata matrices for each object
+```{r}
+palm_ls <- seurat2shiny(
+  object = palm_obj,
+  tech = "sp",
+  assay = "Spatial",
+  slot = "data",
+  image = "s2yq8o_t5hk8u",
+  save = FALSE)
+
+ct_ls <- seurat2shiny(
+  object = ct_obj,
+  tech = "sp",
+  assay = "Spatial",
+  slot = "data",
+  image = "ivuznh_s8xyfv",
+  save = FALSE)
+
+```
+
+2nd Join expression matrices
+```{r}
+cn_palm <- glue::glue("palm_{colnames(palm_ls[[2]])}")
+expr_palm <- palm_ls[[2]]
+# Adapt colnames
+colnames(expr_palm) <- cn_palm
+
+
+cn_ct <- glue::glue("ctl_{colnames(ct_ls[[2]])}")
+expr_ct <- ct_ls[[2]]
+# Adapt colnames
+colnames(expr_ct) <- cn_ct
+
+
+# Now to join both matrices
+expr_palm_df <- data.frame(expr_palm, check.names = FALSE) %>% tibble::rownames_to_column("gene")
+expr_ct_df <- data.frame(expr_ct, check.names = FALSE) %>% tibble::rownames_to_column("gene")
+expr_df <- dplyr::full_join(expr_palm_df, expr_ct_df, by = "gene",)
+expr_df[is.na(expr_df)] <- 0
+
+expr_df <- expr_df %>% tibble::column_to_rownames("gene")
+
+# Convert to sparse matrices
+expr_mtrx <- Matrix::Matrix(as.matrix(expr_df), sparse = TRUE)
+saveRDS(object = expr_mtrx,
+        file = "misc/expr_mtrx_dKDCD36_palm-control.RDS")
+```
+
+3rd Join metadata
+```{r}
+rn_palm <- glue::glue("palm_{rownames(palm_ls[[1]])}")
+metadata_palm <- palm_ls[[1]]
+# Adapt colnames
+rownames(metadata_palm) <- rn_palm
+
+
+rn_ct <- glue::glue("ctl_{rownames(ct_ls[[1]])}")
+metadata_ct <- ct_ls[[1]]
+# Adapt colnames
+rownames(metadata_ct) <- rn_ct
+```
+
+Since we want to show them side by side we are going to add the control diet to the right.
+To do this we are going to add to the X coordinates the max of the palm diet + 100 extra points to give some margin between them. We will not touch the Y axis so that they are at the same height
+```{r}
+metadata_ct$coord_x <- metadata_ct$coord_x + max(metadata_palm$coord_x) + 100
+```
+
+Lastly we bind the rows
+```{r}
+metadata_df <- dplyr::bind_rows(metadata_palm, metadata_ct)
+
+ggplot(metadata_df) +
+  geom_point(aes(x = coord_x,
+                 y = coord_y,
+                 color = percent.mouse),
+             size = 2) +
+  theme_void()
+```
+
+Save metadata
+```{r}
+metadata_df$barcode <- rownames(metadata_df)
+saveRDS(object = metadata_df,
+        file = here::here("misc/metadata_dKDCD36_palm-control.rds"))
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

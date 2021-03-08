@@ -1,0 +1,218 @@
+---
+author: "Marc Elosua-Bayes"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: html_document
+params: 
+    sample_id: "Default!"
+title: "`r sprintf('%s Clustering', params$sample_id)`"
+---
+
+---
+title: `r params$sample_id`
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+This script is set to carry out data scaling and normalization and clustering at different resolutions.
+In this script we use the data coming from *02-QC/02-QC_common.Rmd*.
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+
+dir.create(path = here::here(sprintf("%s/%s", clust_27, plt_dir)),
+           showWarnings = FALSE,
+           recursive = TRUE)
+
+dir.create(path = here::here(sprintf("%s/%s", clust_27, robj_dir)),
+           showWarnings = FALSE,
+           recursive = TRUE)
+```
+
+```{r}
+sample_id <- params$sample_id
+donor_id <- qc_dict[[sample_id]][["sample_id"]]
+# sample_id <- "s2yq8o_t5hk8u"
+```
+
+## Load data
+We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
+```{r}
+se_obj <- readRDS(file = here::here(sprintf("%s/%s/qc_se_%s.rds",
+                                            qc_27, robj_dir, sample_id)))
+```
+
+## Analysis
+
+### Scale and Normalize
+```{r}
+se_obj <- se_obj %>% 
+  Seurat::NormalizeData(., verbose = FALSE) %>%
+  Seurat::FindVariableFeatures(., verbose = FALSE) %>%
+  Seurat::ScaleData(., verbose = FALSE) %>%
+  Seurat::RunPCA(., verbose = FALSE)
+```
+
+### Clustering + non-linear dimensionality embedding
+```{r}
+Seurat::ElbowPlot(se_obj)
+
+se_obj <- Seurat::FindNeighbors(se_obj,
+                                   reduction = "pca",
+                                   dims = 1:10,
+                                   verbose = FALSE) %>% 
+  Seurat::FindClusters(resolution = c(0.1, 0.3, 0.5, 0.75, 1))
+
+se_obj <- Seurat::RunUMAP(se_obj,
+                          reduction = "pca",
+                          dims = 1:10,
+                          verbose = FALSE)
+```
+
+Visualize the clustering
+```{r fig.height=8, fig.width=10}
+Seurat::DimPlot(object = se_obj,
+                group.by = c("Spatial_snn_res.0.1",
+                             "Spatial_snn_res.0.3",
+                             "Spatial_snn_res.0.5",
+                             "Spatial_snn_res.0.75",
+                             "Spatial_snn_res.1"),
+                label = TRUE)
+```
+
+```{r fig.height=10, fig.width=14}
+Seurat::SpatialDimPlot(object = se_obj,
+                group.by = c("Spatial_snn_res.0.1",
+                             "Spatial_snn_res.0.3",
+                             "Spatial_snn_res.0.5",
+                             "Spatial_snn_res.0.75",
+                             "Spatial_snn_res.1"))
+
+```
+
+## Save object
+```{r}
+saveRDS(object = se_obj,
+        file = here::here(sprintf("%s/%s/clust_se_%s.RDS",
+                                  clust_27, robj_dir, sample_id)))
+```
+
+We are also going to save the files to be used in the shiny app. We can find the *seurat2shiny* function [here](https://github.com/Single-Cell-Genomics-Group-CNAG-CRG/shiny-annotation/blob/main/seurat2shiny.R)
+```{r}
+seurat2shiny = function(
+    object                         ,
+    tech      = c("sc", "sp")      ,
+    assay     = object@active.assay,
+    slot      = "data"             ,
+    reduction = "umap"             ,
+    image     = NULL               ,
+    asfactors = NULL               ,
+    save      = TRUE               ,
+    path      = "."                  # path = getwd()
+) {
+    suppressMessages( library(Seurat) );
+
+    # Input check.
+    if ( ! is(object, "Seurat") )
+        stop("'object' is not a Seurat object.");
+
+    if ( ! assay %in% Seurat::Assays(object) )
+        stop("'assay' not in the Seurat object's available assays.");
+
+    if ( tech == "sc" & ! (reduction %in% names(object@reductions)) )
+        stop("'reduction' not in the Seurat object's available reductions.");
+
+    if ( ! slot %in% c("counts", "data", "scale.data") )
+        stop("'slot' not in the Seurat object's available slots.");
+    
+    if ( ! tech %in% c("sc", "sp") )
+        stop("tech must be sc or sp.");
+    
+    
+    # Check Which technology it is processing
+    if (tech == "sc") {
+        # Extract 2D coordinates.
+        embeds <- as.data.frame(object@reductions[[reduction]]@cell.embeddings);
+        names(embeds) <- c("coord_x", "coord_y");
+    } else if (tech == "sp") {
+        # If the iimage is null select the first one
+        if (is.null(image)) {
+            image <- names(object@images)[1]
+            warning(sprintf("image is not set, we will use %s", image))
+        } 
+        
+        embeds <- data.frame(object@images[[image]]@coordinates[, c("imagerow", "imagecol")])
+        colnames(embeds) <- c("coord_y", "coord_x");
+        
+        # Inverse coord_y
+        embeds$coord_y <- - embeds$coord_y
+    }
+    
+
+    # Join metadata with coordinates.
+    metadata <- object@meta.data;
+
+    for (col in asfactors) {
+        metadata[[col]] <- as.factor(metadata[[col]]);
+    };
+
+    metadata <- merge(x = metadata, y = embeds, by = "row.names");
+    names(metadata)[1] <-  "barcode"; # names(metadata)[names(metadata) == "Row.names"] = "barcode";
+    rownames(metadata) <- metadata$barcode
+
+    # Extract expression data.
+    # expression = as.matrix( Seurat::GetAssayData(object = object, slot = slot, assay = assay) );
+    expression = Seurat::GetAssayData(object = object, slot = slot, assay = assay);
+
+    if ( ! identical( as.character(metadata$barcode), colnames(expression) ) )
+        warning("Cells in metadata and expression matrix do not match.");
+
+    if (save) {
+        saveRDS( object = metadata  , file = paste0(path, "/metadata.rds"  ) );
+        saveRDS( object = expression, file = paste0(path, "/expression.rds") );
+    };
+
+    invisible(
+        list(metadata = metadata, expression = expression)
+    );
+}
+```
+
+```{r}
+list_shiny <- seurat2shiny(object = se_obj,
+                           tech = "sp",
+                           image = sample_id,
+                           assay = "Spatial",
+                           slot = "data")
+
+saveRDS(object = list_shiny[[1]],
+        file = here::here(sprintf("%s/%s/metadata_%s.RDS",
+                                  clust_27, robj_dir, donor_id)))
+saveRDS(object = list_shiny[[2]],
+        file = here::here(sprintf("%s/%s/expression_%s.RDS",
+                                  clust_27, robj_dir, donor_id)))
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

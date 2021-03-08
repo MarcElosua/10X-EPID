@@ -1,0 +1,532 @@
+---
+author: "Marc Elosua-Bayes"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+params: 
+    sample_id: "Default!"
+    donor_id: "Default!"
+title: "`r glue::glue('07-scRNAseq mapping visualization - {params$donor_id}')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+This script is set to map the annotated SC dataset on to the spatial transcriptomics Visium slide.
+In this script we use the Visium data coming from *03-Clustering/03-clustering* and the deconvolution generated in *06-sc_mapping.Rmd*.
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(glue)
+library(stringr)
+library(readr)
+library(Matrix)
+library(SPOTlight)
+library(ggcorrplot)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+set.seed(123)
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+
+"{map_27}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{map_27}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+```
+
+```{r}
+sample_id <- params$sample_id
+# sample_id <- "uzntl1_fkclxp"
+donor_id <- qc_dict[[sample_id]][["sample_id"]]
+```
+
+## Load data
+We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
+```{r}
+# 03-Clustering/03-clustering
+se_obj <- "{clust_27}/{robj_dir}/clust_se_{sample_id}.RDS" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# decon_mtrx_ls <- readRDS(
+#   file = here::here(glue::glue("{map_27}/{robj_dir}/decon_mtrx_epid_{sample_id}.rds")))
+
+decon_mtrx_ls <- "{map_27}/{robj_dir}/decon_mtrx_epid_{sample_id}_v2.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+```
+
+Create a directory between cell type and the modified cell type name.
+```{r}
+col_df <- readRDS(file = here::here("misc/col_df2.rds"))
+# col_df <- readRDS(file = here::here("misc/col_df.rds"))
+ct <- col_df$cell_type
+ct <- ct[ ! ct %in% c("Erithrocytes") ]
+```
+
+## Analysis
+Change old names to ones unmodified without dots
+```{r}
+decon_mtrx <- decon_mtrx_ls[[2]]
+decon_mtrx <- decon_mtrx[, colnames(decon_mtrx) != "res_ss"]
+
+# Set as 0 cell types predicted to be under 4 % of the spot
+# decon_mtrx[decon_mtrx < 0.07] <- 0
+decon_mtrx[decon_mtrx < 0.04] <- 0
+
+new_colnames <- data.frame(ct_name = colnames(decon_mtrx),
+                           stringsAsFactors = FALSE) %>%
+  dplyr::left_join(col_df, by = c("ct_name" = "cell_type_mod")) %>%
+  dplyr::pull(cell_type)
+
+colnames(decon_mtrx) <- new_colnames
+```
+
+We are going to add the deconvolution to the Seurat object.
+```{r}
+metadata <- cbind(se_obj@meta.data, decon_mtrx)
+se_obj@meta.data <- metadata
+```
+
+Save the seurat object with the Cell type scores
+```{r eval=FALSE}
+"{map_27}/{robj_dir}/se_deconv_{sample_id}_epid20.rds" %>%
+# "{map_27}/{robj_dir}/se_deconv_{sample_id}.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = se_obj,
+    file = .)
+```
+
+### Visualization
+```{r}
+Seurat::SpatialFeaturePlot(object = se_obj,features = "Tumour-associated Schwann Cells")
+```
+
+### % mouse vs prop. of Schwann cells
+```{r fig.width=5, fig.height=5}
+ggpubr::ggscatter(
+  data = se_obj@meta.data,
+  x = "percent.mouse",
+  y = "Tumour-associated Schwann Cells",
+  color = "Spatial_snn_res.0.1",
+  add = "reg.line",  # Add regression line
+  add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+  conf.int = TRUE, # Add confidence interval
+  cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+  cor.coeff.args = list(method = "pearson", label.sep = "\n"))
+
+ggpubr::ggscatter(
+  data = se_obj@meta.data,
+  x = "percent.mouse",
+  y = "Tumour-associated Schwann Cells",
+  color = "Spatial_snn_res.0.1",
+  add = "loess",  # Add regression line
+  add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+  conf.int = TRUE, # Add confidence interval
+  cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+  cor.coeff.args = list(method = "pearson", label.sep = "\n"))
+```
+
+```{r fig.width=8, fig.height=5}
+Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = c("percent.mouse", "Tumour-associated Schwann Cells"))
+
+Seurat::SpatialDimPlot(
+  object = se_obj,
+  group.by = c("Spatial_snn_res.0.1", "Spatial_snn_res.0.5"))
+
+```
+
+#### Cell type location
+Look at the location of each cell type in each slice separately
+```{r fig.height=25, fig.width=25}
+Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = "percent.mouse")
+
+# Seurat::SpatialFeaturePlot(
+#   object = se_obj,
+#   features = ct,
+#   alpha = c(1, 1)) &
+#   scale_fill_gradientn(
+#       colors = heat.colors(10, rev = TRUE))
+
+# Iterate over cell types
+ct_plt_ls <- lapply(ct, function(i) {
+  tmp_plt <- Seurat::SpatialFeaturePlot(object = se_obj,
+                                        features = i,
+                                        alpha = c(0, 1)) +
+    scale_fill_gradientn(
+      colors = heat.colors(10, rev = TRUE)) +
+    scale_alpha(range = c(0, 1)) +
+    labs(title = stringr::str_wrap(string = i,
+                                   width = 25),
+         fill = "") +
+    theme(plot.title = element_text(hjust = 0.5,
+                                    size = 20,
+                                    face = "bold"))
+  
+  if (sum(se_obj@meta.data[, i]) == 0) {
+    tmp_plt <- suppressMessages(tmp_plt + scale_alpha(range = c(0,0)))
+  }
+  
+  return(tmp_plt)
+})
+
+plt_arr <- cowplot::plot_grid(
+  plotlist = ct_plt_ls,
+  axis = "trbl",
+  align = "hv")
+
+plt_arr
+
+# "{map_27}/{plt_dir}/cell_type_location_{sample_id}.pdf" %>%
+"{map_27}/{plt_dir}/cell_type_location_{sample_id}_epid20.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = plt_arr,
+    base_height = 25,
+    base_width = 25)
+```
+
+#### Spatial scatterpie
+```{r fig.height=8, fig.width=8, eval=FALSE}
+sct_plt1 <- SPOTlight::scatterpie_plot(se_obj = se_obj,
+                                       cell_types_all = ct,
+                                       pie_scale = 0.4) +
+          scale_fill_manual(values = col_df[col_df$cell_type %in% ct, "ct_col"],
+                            breaks = ct) +
+          coord_fixed(ratio = 1) +
+          guides(fill = guide_legend(ncol = 1))
+sct_plt1
+
+"{map_27}/{plt_dir}/spatial_{sample_id}_scatterpie.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = sct_plt1,
+    base_width = 12,
+    base_height = 9)
+```
+
+We can also take a look at the spatial scatterpie by looking at cell types which are not present throughout the entire tissue.
+```{r fig.height=8, fig.width=8, eval = FALSE}
+# Subset cell types from metadata
+metadata_subset <- se_obj@meta.data[, ct]
+
+# Create masks
+keep_0.9 <- colSums(metadata_subset > 0) < 0.7 * ncol(se_obj)
+keep_g0 <- colSums(metadata_subset > 0) > 0
+
+# Select cell types fullfiling the conditions
+ct_var <- colnames(metadata_subset)[keep_0.9 & keep_g0]
+
+sct_int_plt <- SPOTlight::scatterpie_plot(se_obj = se_obj,
+                                       cell_types_all = ct_var,
+                                       pie_scale = 0.4) +
+          scale_fill_manual(values = col_df[col_df$cell_type %in% ct_var, "ct_col"],
+                            breaks = ct_var,
+                            labels = stringr::str_wrap(string = ct_var,
+                                                       width = 25)) +
+          coord_fixed(ratio = 1) +
+          theme(legend.position = "top",
+                legend.text = element_text(size = 12),
+                legend.title = element_blank()) +
+          guides(fill = guide_legend(nrow = 3, byrow = TRUE))sct_int_plt
+
+sct_int_plt
+
+"{map_27}/{plt_dir}/{sample_id}_scatterpie_subset.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = sct_int_plt,
+    base_width = 9,
+    base_height = 9)
+```
+
+#### Cell-Cell correlation plot
+By looking at correlations we want to assess if there are cell types which are correlating in space. So when one is present is another one also present?
+
+We will be using `ggcorrplot` to show these correlation plots a bit nicer:
+http://www.sthda.com/english/wiki/ggcorrplot-visualization-of-a-correlation-matrix-using-ggplot2
+
+Get correlation matrix between all cell types
+```{r fig.height=12, fig.width=12, eval=FALSE}
+decon_df <- se_obj@meta.data %>%
+  dplyr::select(all_of(ct))
+
+# Remove cell types not predicted to be on the tissue
+decon_df <- decon_df[, colSums(decon_df) > 0]
+decon_cor <- cor(decon_df)
+
+# Compute correlation P-value
+p.mat <- corrplot::cor.mtest(mat = decon_df, conf.level = 0.95)
+colnames(decon_cor) <- stringr::str_wrap(string = colnames(decon_cor), width = 30)
+rownames(decon_cor) <- stringr::str_wrap(string = rownames(decon_cor), width = 30)
+
+cor_plt <- ggcorrplot::ggcorrplot(corr = decon_cor,
+           p.mat = p.mat[[1]],
+           hc.order = TRUE,
+           type = "full",
+           insig = "blank",
+           lab = TRUE,
+           outline.col = "lightgrey",
+           method = "square",
+           # colors = c("#4477AA", "white", "#BB4444"))
+           colors = c("#6D9EC1", "white", "#E46726"),
+           title = glue::glue("{donor_id} cell-cell proportion correlation\nSample"),
+           legend.title = "Correlation\n(Pearson)") +
+   theme(
+    plot.title = element_text(size = 22, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 15),
+    axis.text.x = element_text(angle = 90),
+    axis.text = element_text(size = 18, vjust = 0.5))
+cor_plt
+
+"{map_27}/{plt_dir}/correlation_plot_{sample_id}.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    plot = cor_plt,
+    filename = .,
+    base_width = 16,
+    base_height = 12)
+
+# Now without labels
+cor_plt <- ggcorrplot::ggcorrplot(corr = decon_cor,
+           p.mat = p.mat[[1]],
+           hc.order = TRUE,
+           type = "full",
+           insig = "blank",
+           lab = FALSE,
+           outline.col = "lightgrey",
+           method = "square",
+           # colors = c("#4477AA", "white", "#BB4444"))
+           colors = c("#6D9EC1", "white", "#E46726"),
+           title = glue::glue("{donor_id} cell-cell proportion correlation\nSample"),
+           legend.title = "Correlation\n(Pearson)") +
+  theme(
+    plot.title = element_text(size = 25, hjust = 0.5, face = "bold"),
+    legend.text = element_text(size = 18),
+    legend.title = element_text(size = 22),
+    axis.text.x = element_text(angle = 90, size = 18, vjust = 0.5),
+    axis.text.y = element_text(vjust = 0.5, size = 18))
+
+cor_plt
+
+"{map_27}/{plt_dir}/correlation_plot_{sample_id}_labeless.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    plot = cor_plt,
+    filename = .,
+    base_width = 18,
+    base_height = 15)
+```
+
+#### Cell-Cell scatter correlation
+```{r fig.height=15, fig.width=15, eval=FALSE}
+# Correlation panel
+panel.cor <- function(x, y){
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- round(cor(x, y), digits=2)
+    txt <- paste0("R = ", r)
+    cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = 2)
+}
+# Customize upper panel
+upper.panel<-function(x, y){
+  points(x,y, pch = 20)
+}
+# Create the plots
+pairs(decon_mtrx,
+      lower.panel = panel.cor,
+      upper.panel = upper.panel,
+      cex.labels = 2)
+```
+
+#### Cell-Mouse correlation
+```{r fig.height=25, fig.width=25, eval = FALSE}
+ggplotColours <- function(n = 6, h = c(0, 360) + 15){
+  if ((diff(h) %% 360) < 1) h[2] <- h[2] - 360/n
+  hcl(h = (seq(h[1], h[2], length = n)), c = 100, l = 65)
+}
+
+color_seurat <- ggplotColours(n = length(unique(se_obj$Spatial_snn_res.1)))
+
+plt_ls <- lapply(ct, function(i) {
+  ggplot(se_obj@meta.data,
+         aes_string(
+           x = "percent.mouse",
+           y = se_obj@meta.data[, i],
+           color = "Spatial_snn_res.1")) +
+    geom_point() +
+    stat_cor() +
+    labs(y = i) +
+    # scale_color_brewer(palette = "Paired") +
+    scale_color_manual(values = color_seurat) +
+    theme_pubr()
+
+})
+
+# Join plots
+plt_arr <- cowplot::plot_grid(
+  plotlist = plt_ls,
+  align = "hv",
+  axis = "trbl")
+
+# plt_arr
+cowplot::save_plot(
+  filename = here::here(glue::glue("{map_27}/{plt_dir}/celltype_mousepct_correlation_{donor_id}.pdf")),
+  plot = plt_arr,
+  base_height = 25,
+  base_width = 25
+)
+```
+
+Lastly we will extract the metadata and counts and save them so we can use them in th in-house shinny app
+`seurat2shiny` function can be found [here](https://github.com/Single-Cell-Genomics-Group-CNAG-CRG/shiny-annotation/blob/main/seurat2shiny.R)
+```{r echo = FALSE}
+seurat2shiny = function(
+    object                         ,
+    tech      = c("sc", "sp")      ,
+    assay     = object@active.assay,
+    slot      = "data"             ,
+    reduction = "umap"             ,
+    image     = NULL               ,
+    asfactors = NULL               ,
+    save      = TRUE               ,
+    path      = "."                  # path = getwd()
+) {
+    suppressMessages( library(Seurat) );
+
+    # Input check.
+    if ( ! is(object, "Seurat") )
+        stop("'object' is not a Seurat object.");
+
+    if ( ! assay %in% Seurat::Assays(object) )
+        stop("'assay' not in the Seurat object's available assays.");
+
+    if ( tech == "sc" & ! (reduction %in% names(object@reductions)) )
+        stop("'reduction' not in the Seurat object's available reductions.");
+
+    if ( ! slot %in% c("counts", "data", "scale.data") )
+        stop("'slot' not in the Seurat object's available slots.");
+    
+    if ( ! tech %in% c("sc", "sp") )
+        stop("tech must be sc or sp.");
+    
+    
+    # Check Which technology it is processing
+    if (tech == "sc") {
+        # Extract 2D coordinates.
+        embeds <- as.data.frame(object@reductions[[reduction]]@cell.embeddings);
+        names(embeds) <- c("coord_x", "coord_y");
+    } else if (tech == "sp") {
+        # If the image is null select the first one
+        if (is.null(image)) {
+            image <- names(object@images)[1]
+            warning(sprintf("image is not set, we will use %s", image))
+        } 
+        
+        embeds <- data.frame(object@images[[image]]@coordinates[, c("imagerow", "imagecol")])
+        colnames(embeds) <- c("coord_y", "coord_x");
+        
+        # Inverse coord_y
+        embeds$coord_y <- - embeds$coord_y
+    }
+    
+
+    # Join metadata with coordinates.
+    metadata <- object@meta.data;
+
+    for (col in asfactors) {
+        metadata[[col]] <- as.factor(metadata[[col]]);
+    };
+
+    metadata <- merge(x = metadata, y = embeds, by = "row.names");
+    names(metadata)[1] <-  "barcode"; # names(metadata)[names(metadata) == "Row.names"] = "barcode";
+    rownames(metadata) <- metadata$barcode
+
+    # Extract expression data.
+    # expression = as.matrix( Seurat::GetAssayData(object = object, slot = slot, assay = assay) );
+    expression = Seurat::GetAssayData(object = object, slot = slot, assay = assay);
+
+    if ( ! identical( as.character(metadata$barcode), colnames(expression) ) )
+        warning("Cells in metadata and expression matrix do not match.");
+
+    if (save) {
+        saveRDS( object = metadata  , file = paste0(path, "/metadata.rds"  ) );
+        saveRDS( object = expression, file = paste0(path, "/expression.rds") );
+    };
+
+    invisible(
+        list(metadata = metadata, expression = expression)
+    );
+}
+```
+
+Extract elements
+```{r eval = FALSE}
+se_obj@images
+shiny_ls <- seurat2shiny(
+  object = se_obj,
+  tech = "sp",
+  assay = "Spatial",
+  slot = "data",
+  image = sample_id)
+
+saveRDS(object = shiny_ls[[1]],
+        file = here::here(glue::glue("{map_27}/{robj_dir}/metadata_{sample_id}.rds")))
+
+saveRDS(object = shiny_ls[[2]],
+        file = here::here(glue::glue("{map_27}/{robj_dir}/expression_{sample_id}.rds")))
+
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```
+

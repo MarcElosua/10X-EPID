@@ -1,0 +1,402 @@
+---
+author: "Marc Elosua-Bayes"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+params: 
+    sample_id: "Default!"
+    donor_id: "Default!"
+title: "`r glue::glue('Cell Type - Marker association {params$donor_id}')`"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+In this script we are going to look at the association between the predicted cell-type presence|proportion and the presence|expression of key marker genes.
+In this script we use the Visium data coming from *07-sc_mapping_viz.Rmd*.
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(glue)
+library(stringr)
+library(readr)
+library(Matrix)
+library(SPOTlight)
+library(ggcorrplot)
+library(reticulate)
+
+# path_to_python <- "~/anaconda3/envs/MAGIC"
+path_to_python <- "/scratch/groups/hheyn/software/anaconda3/envs/MAGIC/"
+# reticulate::use_python(path_to_python, required = TRUE)
+reticulate::use_condaenv(path_to_python)
+reticulate::py_discover_config(required_module = "magic")
+reticulate::py_config()
+library(Rmagic)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+set.seed(123)
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+
+"{map_27}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{map_27}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+```
+
+```{r}
+sample_id <- params$sample_id
+# sample_id <- "uzntl1_fkclxp"
+# sample_id <- "k886qc_rqix54"
+donor_id <- qc_dict[[sample_id]][["sample_id"]]
+```
+
+## Load data
+We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
+```{r}
+# 07-sc_mapping_viz.Rmd
+se_obj <- "{map_27}/{robj_dir}/se_deconv_{sample_id}_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# *sc_analysis/04-annotation/07-join_annotation.Rmd
+sc_obj <- "{anot_28}/{robj_dir}/harmony_se_annot.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+```
+
+## Analysis
+
+### % mouse vs prop. of Schwann cells
+```{r fig.width=5, fig.height=5}
+ggpubr::ggscatter(
+  data = se_obj@meta.data,
+  x = "percent.mouse",
+  y = "Tumour-associated Schwann Cells",
+  color = "Spatial_snn_res.0.1",
+  add = "reg.line",  # Add regression line
+  add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+  conf.int = TRUE, # Add confidence interval
+  cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+  cor.coeff.args = list(method = "pearson", label.sep = "\n"))
+```
+
+### Seurat anchor transfer
+create new sc seurat object chaging the gene names to match the ones in spatial
+```{r}
+new_rn <- glue::glue("mm10---{rownames(sc_obj@assays$RNA@counts)}")
+adapt_mtrx <- sc_obj@assays$RNA@counts
+rownames(adapt_mtrx) <- new_rn
+
+sc_mod <- Seurat::CreateSeuratObject(
+  counts = adapt_mtrx,
+  meta.data = sc_obj@meta.data)
+```
+
+We will use Seurat's anchor transfer to map schwann celss onto the visium slide
+```{r}
+se_obj <- Seurat::SCTransform(se_obj, assay = "Spatial", verbose = FALSE) %>%
+  Seurat::RunPCA(verbose = FALSE)
+
+sc_mod <- Seurat::SCTransform(sc_mod, assay = "RNA", ncells = 3000, verbose = FALSE) %>%
+  Seurat::RunPCA(verbose = FALSE)
+
+# se_obj@active.assay <- 'Spatial'
+# sc_mod@active.assay <- 'RNA'
+
+anchors <- Seurat::FindTransferAnchors(
+  reference = sc_mod,
+  query = se_obj,
+  normalization.method = "SCT")
+
+
+predictions.assay <- Seurat::TransferData(
+  anchorset = anchors,
+  refdata = sc_mod$specific_annot,
+  prediction.assay = TRUE, 
+  weight.reduction = se_obj[["pca"]],
+  dims = 1:30)
+
+anchor_ct <- t(predictions.assay@data)
+colnames(anchor_ct) <- glue::glue("anchor-{colnames(anchor_ct)}")
+```
+
+Look at predicted anchor-Tumour-associated Schwann Cells spatial location
+```{r fig.width=5, fig.height=5}
+se_obj@meta.data <- cbind(se_obj@meta.data, anchor_ct)
+feat_plt <- Seurat::SpatialFeaturePlot(
+  se_obj,
+  features = c("anchor-Tumour-associated Schwann Cells", "GRCh38-CD36"),
+  pt.size.factor = 1.5,
+  ncol = 1,
+  crop = TRUE)
+```
+
+## Chi-square test test
+Here we are going to compute if the number of spots overlapping Cd36 and Tumour-associated Schwann Cells
+```{r}
+df <- data.frame(
+  "Schwann Cells" = se_obj@meta.data[, "anchor-Tumour-associated Schwann Cells"],
+  # "Schwann Cells" = se_obj@meta.data[, "Tumour-associated Schwann Cells"],
+  "GRCh38-CD36" = se_obj@assays$Spatial@data["GRCh38-CD36", ],
+  check.names = FALSE
+)
+
+df <- df %>%
+  dplyr::mutate(
+    `Schwann Cells cat` = dplyr::if_else(`Schwann Cells` > 0, 1L, 0L),
+    `GRCh38-CD36 cat` = dplyr::if_else(`GRCh38-CD36` > 0, 1L, 0L)
+  )
+
+tb_chi <- table(ct = df$`Schwann Cells cat`, gene = df$`GRCh38-CD36 cat`)
+```
+
+Look at contingency table and the proportions
+```{r}
+tb_chi
+prop.table(tb_chi)
+```
+
+Compute chi-square test
+```{r}
+chisq <- chisq.test(tb_chi)
+chisq
+```
+
+Null model
+```{r}
+round(chisq$expected, 2)
+prop.table(round(chisq$expected, 2))
+```
+
+```{r}
+prop.table(tb_chi) - prop.table(round(chisq$expected, 2))
+```
+
+### MAGIC denoising
+Since we are going to be computing correlations between genes and porportions we are going to run [MAGIC](https://magic.readthedocs.io/en/stable/) developped by Smita Krishnaswamy's to try to fill in the drop out reads in the spots. `MAGIC` is a Markov Affinity-based Graph Imputation of Cells used for denoising high-dimensional data most commonly applied to single-cell RNA sequencing data. MAGIC learns the manifold data, using the resultant graph to smooth the features and restore the structure of the data based on their k-nearest neighbors.
+
+We are specifically interested in the relation between CD36 and tumour-asso0ciated scwann cells so we will denoise mouse and humn cd36 to start
+```{r}
+se_obj <- Rmagic::magic(
+  data = se_obj,
+  assay = "Spatial",
+  counts = "data",
+  genes = c("mm10---Cd36", "GRCh38-CD36"),
+  knn = 3,
+  knn.max = NULL,
+  decay = 1,
+  t = 5,
+  npca = 100,
+  init = NULL,
+  t.max = 20,
+  knn.dist.method = "euclidean",
+  verbose = 1,
+  n.jobs = 1,
+  seed = 123)
+```
+
+Look at gene expression pre- and post- MAGIC.
+```{r fig.width=15, fig.height=12}
+pre <- Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = c("mm10---Cd36", "GRCh38-CD36", "Tumour-associated Schwann Cells"),
+  slot = "data")
+
+se_obj@active.assay <- 'MAGIC_Spatial'
+post <- Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = c("mm10---Cd36", "GRCh38-CD36", "Tumour-associated Schwann Cells"),
+  slot = "data")
+
+# look at both plots together
+pre / post
+
+se_obj@active.assay <- 'Spatial'
+```
+
+### Cell type-Marker Correlation
+```{r}
+df <- data.frame(
+  ct = se_obj@meta.data[, "Tumour-associated Schwann Cells"],
+  gene = se_obj@assays$Spatial@data["GRCh38-CD36", ],
+  check.names = FALSE
+)
+
+ggpubr::ggscatter(
+  data = df,
+  x = "gene",
+  y = "ct",
+  add = "reg.line",  # Add regressin line
+  add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+  conf.int = TRUE, # Add confidence interval
+  cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+  cor.coeff.args = list(method = "pearson", label.sep = "\n"))
+```
+
+```{r}
+df_magic <- data.frame(
+  ct = se_obj@meta.data[, "Tumour-associated Schwann Cells"],
+  gene = se_obj@assays$MAGIC_Spatial@data["GRCh38-CD36", ],
+  check.names = FALSE
+)
+
+ggpubr::ggscatter(
+  data = df_magic,
+  x = "gene",
+  y = "ct",
+  add = "reg.line",  # Add regression line
+  add.params = list(color = "blue", fill = "lightgray"), # Customize reg. line
+  conf.int = TRUE, # Add confidence interval
+  cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+  cor.coeff.args = list(method = "pearson", label.sep = "\n"))
+```
+
+### Stratification
+We are also interested
+```{r}
+Seurat::SpatialDimPlot(
+  object = se_obj,
+  group.by = c("Spatial_snn_res.0.1", "Spatial_snn_res.0.5"))
+
+if (sample_id == "uzntl1_fkclxp") {
+  se_obj@meta.data <- se_obj@meta.data %>%
+    dplyr::mutate(
+      stratification = dplyr::case_when(
+        Spatial_snn_res.0.1 == 0 ~ "Tumour",
+        Spatial_snn_res.0.5 == 3 ~ "Tumour Front",
+        TRUE ~ "Healthy"
+        ),
+      stratification = factor(stratification,
+                              levels = c("Healthy", "Tumour Front", "Tumour"))
+      )
+  
+} else if (sample_id == "ivuznh_s8xyfv") {
+  se_obj@meta.data <- se_obj@meta.data %>%
+    dplyr::mutate(
+      stratification = dplyr::case_when(
+        Spatial_snn_res.0.1 == 1 ~ "Tumour",
+        Spatial_snn_res.0.1 == 2 ~ "Tumour Front",
+        TRUE ~ "Healthy"
+        ),
+      stratification = factor(stratification,
+                              levels = c("Healthy", "Tumour Front", "Tumour"))
+      )
+
+} else if (sample_id == "k886qc_rqix54") {
+    se_obj@meta.data <- se_obj@meta.data %>%
+      dplyr::mutate(
+        stratification = dplyr::case_when(
+          Spatial_snn_res.0.3 == 4 ~ "Tumour",
+          Spatial_snn_res.0.3 == 3 ~ "Tumour Front",
+          TRUE ~ "Healthy"
+          ),
+        stratification = factor(stratification,
+                                levels = c("Healthy", "Tumour Front", "Tumour"))
+        )
+
+} else if (sample_id == "s2yq8o_t5hk8u") {
+    se_obj@meta.data <- se_obj@meta.data %>%
+      dplyr::mutate(
+        stratification = dplyr::case_when(
+          Spatial_snn_res.0.5 %in% c(5, 6) ~ "Tumour",
+          Spatial_snn_res.0.5 == 4 ~ "Tumour Front",
+          TRUE ~ "Healthy"
+          ),
+        stratification = factor(stratification,
+                                levels = c("Healthy", "Tumour Front", "Tumour"))
+        )
+}
+
+
+
+my_comparisons <- list(
+    c("Tumour", "Tumour Front"),
+    c("Tumour", "Healthy"),
+    c("Tumour Front", "Healthy")
+    )
+```
+
+Visualize
+```{r fig.width=9, fig.height=6}
+strat_plt <- ggplot2::ggplot(
+  se_obj@meta.data,
+  ggplot2::aes(x = stratification,
+      y = `Tumour-associated Schwann Cells`)) +
+  ggplot2::geom_violin(
+    alpha = 0.7,
+    ggplot2::aes(
+      fill = stratification,
+      color = stratification)) +
+  ggplot2::geom_jitter(
+    ggplot2::aes(
+      color = stratification)) +
+  ggplot2::labs(
+    x = "Tissue Stratification",
+    y = "Proportion of Tumour-associated Schwann Cells") +
+  ggplot2::theme_classic() +
+  ggpubr::stat_compare_means(
+    label = "p.format",
+    comparisons = my_comparisons,
+    p.adjust.method = "bonferroni",
+    ) +
+  ggpubr::stat_compare_means(label.y = 0.75) +
+  ggplot2::scale_fill_manual(values = c("#009E73", "#E69F00", "#D55E00")) +
+  ggplot2::scale_color_manual(values = c("#009E73", "#E69F00", "#D55E00")) +
+  ggplot2::theme(legend.title = element_blank())
+
+"{map_27}/{plt_dir}/vln_plt_schwann.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = strat_plt,
+    base_height = 6,
+    base_width = 9)
+
+strat_plt
+
+Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = c("Tumour-associated Schwann Cells", "percent.mouse")) +
+  Seurat::SpatialDimPlot(
+    object = se_obj,
+    group.by = "stratification")
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

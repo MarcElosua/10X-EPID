@@ -1,0 +1,619 @@
+---
+title: "Palm diet comparison"
+author: "Marc Elosua"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# knitr::opts_knit$set(root.dir = "../..")
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+In this Rmarkdown document we are going to compare the cell type proportions and DE genes between experimental conditions.
+
+## Libraries
+```{r warning = FALSE, message = FALSE}
+library(dplyr)
+library(Seurat)
+library(DT)
+library(ggplot2)
+# library(ggVennDiagram)
+library(emmeans)
+library(ggrepel)
+```
+
+## Parameters
+Here we will define and load objects and functions that will be used throughout the document.
+```{r}
+set.seed(321)
+source(here::here("utils/bin.R"))
+source(here::here("misc/paths.R"))
+
+"{palm_28}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{palm_28}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+```
+
+## Load data
+The data used in this Rmarkdown document comes from...
+```{r}
+# annot_se <- "{anot_28}/{robj_dir}/annotated_se.rds" %>%
+annot_se <- "{anot_28}/{robj_dir}/harmony_se_annot.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+```
+
+## Analysis
+
+We start by looking at the cell-composition barplot between conditions to assess if there are different cell type proportions.
+```{r fig.height = 8, fig.width = 15}
+colourCount <- length(unique(annot_se$specific_annot))
+getPalette <- colorRampPalette(RColorBrewer::brewer.pal(9, "Set3"))
+
+annot_se@meta.data %>%
+  dplyr::group_by(sample_id) %>%
+  dplyr::mutate(n_group = n()) %>%
+  dplyr::group_by(sample_id, specific_annot ,n_group) %>%
+  dplyr::summarise(n = n()) %>%
+  dplyr::mutate(x_tick = stringr::str_c(sample_id, n_group, sep = "\n")) %>% 
+  ggplot2::ggplot(ggplot2::aes(x = x_tick,
+             y = n,
+             fill = specific_annot
+             )) + 
+    ggplot2::geom_bar(position = "fill",
+             stat = "identity") +
+  ggpubr::theme_pubr() +
+  ggplot2::labs(
+    x = "Diet",
+    y = "Proportion") +
+  ggplot2::scale_fill_manual(values = getPalette(colourCount)) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 60,
+                                   vjust = 1,
+                                   hjust = 1),
+        legend.title = ggplot2::element_blank())
+```
+
+Statistically assess the difference between cell type proportions
+We follow the approached presented by Valentine Svensson [here](https://www.nxn.se/valent/2020/11/28/s9jjv32ogiplagwx8xrkjk532p7k28).
+There a binomial linear model is used to analyse counts of repeated observations of binary choices.
+```{r}
+# Make sure all the cell types are there for all experimental conditions, add 0 to those missing
+all_ct <- unique(annot_se@meta.data$specific_annot)
+all_sample <- unique(annot_se@meta.data$sample_id)
+df <- data.frame("sample_id" = sort(rep(x = all_sample, length(all_ct))),
+                 "specific_annot" = rep(x = all_ct, length(all_sample)),
+                 "count_null" = 0,
+                 stringsAsFactors = FALSE)
+
+# df <- df %>%
+#   # dplyr::left_join(annot_se@meta.data, ) %>%
+#   dplyr::mutate(
+#     count = dplyr::if_else(is.na(count), 0L , count),
+#     total = total,
+#     other = total - count
+#   ) %>% data.frame()
+
+
+metadata <- annot_se@meta.data %>%
+  dplyr::right_join(df, by = c("specific_annot", "sample_id")) %>% 
+  dplyr::select(sample_id, specific_annot) %>%
+  # Get how many cells per cell type for each sample
+  dplyr::group_by(sample_id, specific_annot) %>%
+  dplyr::summarise(count = n()) %>%
+  dplyr::ungroup() %>%
+  # Get total number of cells for each sample
+  dplyr::group_by(sample_id) %>%
+  dplyr::mutate(
+    # 
+    count = dplyr::if_else(count == 1, 0L, count),
+    total = sum(count),
+    other = total - count,
+    experiment = dplyr::case_when(
+      stringr::str_detect(string = sample_id,
+                          pattern = stringr::regex("plko", ignore_case = TRUE)) ~ "PLKO",
+      stringr::str_detect(string = sample_id,
+                            pattern = stringr::regex("shcd36", ignore_case = TRUE)) ~ "shcD36",
+      stringr::str_detect(string = sample_id,
+                          pattern = stringr::regex("shgal", ignore_case = TRUE)) ~ "shGal",
+      stringr::str_detect(string = sample_id,
+                          pattern = stringr::regex("Normal", ignore_case = TRUE)) ~ "Normal",
+      TRUE ~ NA_character_),
+    diet = dplyr::case_when(
+      stringr::str_detect(string = sample_id,
+                          pattern = stringr::regex("ct|control", ignore_case = TRUE)) ~ "Control",
+      stringr::str_detect(string = sample_id,
+                            pattern = stringr::regex("palm", ignore_case = TRUE)) ~ "Palm",
+      TRUE ~ "Control"),
+    facs = dplyr::if_else(sample_id %in% c("25_Plko_ct_diet",
+                                           "25_Plko_Palmdiet",
+                                           "25_shcD36_ctdiet",
+                                           "25_shcD36_PALM_diet"),
+                          "No-FACS", "EpCAM-FACS"),
+    pairs = glue::glue("{experiment}-{facs}")
+    ) %>%
+  dplyr::ungroup()
+
+# metadata[metadata$sample_id == "25_Plko_ct_diet", "specific_annot"]
+# metadata[metadata$sample_id == "Normaltongue", "specific_annot"]
+```
+
+To compute the differences between the number of cell types in 2 conditions we are going to use the *Chi-square test*. This test examines whether rows and columns of a contingency table are statistically significantly associated. \
+* **Null hypothesis (H0)**: the row and the column variables of the contingency table are independent. \
+* **Alternative hypothesis (H1)**: row and column variables are dependent. \
+
+1st - For each cell of the table, we have to calculate the expected value under null hypothesis. \
+For a given cell, the expected value is calculated as follow: \
+\begin{align}
+e=\frac{row.sum*col.sum}{grand.total}
+\end{align}
+Then the Chi-square statistic is computed as:
+\begin{align}
+X^2=\sum\frac{(o - e)^2}{e}
+\end{align}
+
+```{r}
+options(pillar.sigfig = 3)
+
+pairs_ls <- metadata %>%
+  dplyr::filter(pairs != "Normal-EpCAM-FACS") %>%
+  dplyr::pull(pairs) %>%
+  unique()
+
+# Iterate over the pairs of experimemts
+chisq_ls <- lapply(pairs_ls, function(pair) {
+  print(pair)
+  # Extract sample id for those conditions
+  sample_id_vec <- metadata %>%
+    dplyr::filter(pairs == pair) %>%
+    dplyr::pull(sample_id) %>%
+    unique()
+  
+  # Subet both cell-type compositions
+  diet_1 <- metadata %>%
+  dplyr::filter(sample_id == sample_id_vec[1]) %>%
+  dplyr::select(specific_annot, count) %>%
+  dplyr::mutate(count_ct_diet = count) %>%
+  dplyr::select(-count)
+  
+  diet_2 <- metadata %>%
+    dplyr::filter(sample_id == sample_id_vec[2]) %>%
+    dplyr::select(specific_annot, count) %>%
+    dplyr::mutate(count_palm_diet = count) %>%
+    dplyr::select(-count)
+  
+  # join cell type numbers
+  diet_cell_types <- dplyr::left_join(
+    diet_1,
+    diet_2,
+    by = "specific_annot") %>%
+  tibble::column_to_rownames("specific_annot")
+  
+  # Remove rows where both values are 0
+  df_sub <- diet_cell_types[! rowSums(diet_cell_types == 0) != 0, ]
+  # print(df_sub)
+  
+  # Chisq test
+  chisq <- chisq.test(as.matrix(df_sub))
+  prop_tab <- prop.table(as.matrix(df_sub), 2)
+  print(prop_tab)
+  print(chisq)
+  re_ls <- list("chisq_test" = chisq,
+              "prop_tab" = prop_tab)
+  return(re_ls)
+})
+
+names(chisq_ls) <- pairs_ls
+```
+
+Extract chisquare test from chisq_ls
+```{r}
+chisq_df <- purrr::map(chisq_ls, 1) %>%
+  # Extract P value
+  purrr::map(., "p.value") %>%
+  data.frame(check.names = FALSE, row.names = "p-value") %>%
+  t(.) %>%
+  data.frame(check.names = FALSE) %>%
+  tibble::rownames_to_column("pair") %>%
+  tidyr::separate(col = pair,
+                  into = c("experiment", "facs"),
+                  sep = "-",
+                  extra = "merge") %>%
+  dplyr::arrange(facs, experiment) %>%
+  dplyr::rename(p.value = `p-value`)
+
+chisq_df$p.value_adj = p.adjust(p = chisq_df$p.value,
+                                method = "bonferroni")
+```
+
+Visualize changes in all cell types across conditions
+```{r fig.height=8, fig.width=13}
+options(pillar.sigfig = 2)
+# Add chisquare Pvalue to metadata
+metadata %>%
+  dplyr::left_join(chisq_df, by = c("experiment", "facs")) %>%
+  dplyr::filter(experiment != "Normal") %>%
+  # Only keep 1 pvalue
+  dplyr::mutate(
+    p.value_adj = signif(p.value_adj, digits = 3),
+    p.value_txt = dplyr::if_else(specific_annot == "nerve-associated Fibroblasts",
+                                         glue::glue("Adj p-value = {p.value_adj}"), NA_character_),
+    specific_annot = stringr::str_wrap(specific_annot, 40)) %>%
+  tibble::as_tibble() %>% 
+  ggplot(data = .,
+       aes(x = diet,
+           y = count / total,
+           color = specific_annot)) +
+  geom_point(height = 0,
+              width = 0.1) +
+  geom_line(aes(group = specific_annot)) +
+  facet_wrap(. ~ facs + experiment) +
+  geom_text(aes(x = 1, y = 0.4, label = p.value_txt),
+           size = 3,
+           color = "#585858") +
+  scale_y_log10() +
+  theme_minimal() +
+  labs(title = "Cell type proportion changes") +
+  scale_color_manual(values = getPalette(colourCount)) +
+  theme(legend.position = c(1, 0),
+        legend.justification = c(1, 0))
+
+```
+
+Look visually if there are differences only in nerve-associated fibroblasts.
+```{r fig.height=4, fig.width=5}
+(
+  ggplot(
+     data = metadata %>% filter(specific_annot == 'nerve-associated Fibroblasts' &
+                                  experiment != "Normal"),
+     aes(
+       x = diet,
+       y = count / total,
+       color = experiment,
+       shape = facs))
+  + geom_point(height = 0,
+                width = 0.1)
+  + geom_line(aes(group = pairs, linetype = facs))
+  + scale_y_log10()
+  + theme_minimal()
+  + labs(subtitle = 'nerve-associated Fibroblasts')
+)
+```
+
+Notes on how to get the OR, CI and P value can be found here: [How to obtain the P value from a confidence interval](https://doi.org/10.1136/bmj.d2304) and [Odds Ratio](https://www.ncbi.nlm.nih.gov/books/NBK431098/) \
+Get Odds differences between conditions
+```{r eval = FALSE, echo = FALSE, fig.height=10, fig.width=30}
+OR_plots_ls <- lapply(pairs_ls, function(pair) {
+  print(pair)
+  # Extract sample id for those conditions
+  sample_id_vec <- metadata %>%
+    dplyr::filter(pairs == pair) %>%
+    dplyr::pull(sample_id) %>%
+    unique()
+  print(sample_id_vec)
+  
+  # Subet both cell-type compositions
+  diet_ctl <- metadata %>%
+    dplyr::filter(sample_id == sample_id_vec[1]) %>%
+    dplyr::mutate(odds_ctl_diet = count / other) %>%
+    dplyr::rename(count_ctl = count,
+                  other_ctl = other) %>%
+    dplyr::select(specific_annot, odds_ctl_diet, count_ctl, other_ctl)
+  
+  diet_palm <- metadata %>%
+    dplyr::filter(sample_id == sample_id_vec[2]) %>%
+    dplyr::mutate(odds_palm_diet = count / other) %>%
+    dplyr::rename(count_palm = count,
+                  other_palm = other) %>%
+    dplyr::select(specific_annot, odds_palm_diet, count_palm, other_palm)
+  
+  # join cell type numbers
+  OR_cell_types <- diet_ctl %>%
+    dplyr::left_join(diet_palm,
+                     by = "specific_annot") %>%
+    # remove cell type that is 0 in either conditions
+    dplyr::filter_at(., .vars = c("count_palm"), dplyr::any_vars(. != 0)) %>%
+    dplyr::filter_at(., .vars = c("count_ctl"), dplyr::any_vars(. != 0)) %>%
+    dplyr::mutate(
+      OR = odds_palm_diet / odds_ctl_diet,
+      CI_low = exp(log(OR) - 1.96 * sqrt(1 / count_ctl + 1 / count_palm + 
+                                         1 / other_ctl + 1 / other_palm)),
+      CI_high = exp(log(OR) + 1.96 * sqrt(1 / count_ctl + 1 / count_palm + 
+                                         1 / other_ctl + 1 / other_palm)),
+      SE = (log(CI_high) - log(CI_low)) / (2 * 1.96),
+      Z = log(OR) / SE,
+      pval =  exp(-0.717 * abs(Z) - 0.416 * (abs(Z) ^ 2)),
+      pval = signif(pval, digits = 2),
+      pval_txt = glue::glue("P-value = {pval}"),
+      specific_annot = stringr::str_wrap(string = specific_annot, width = 40)
+      )
+  # print(OR_cell_types)
+  ggplot(data = OR_cell_types,
+         aes(x = OR,
+             y = specific_annot)) +
+    geom_point() +
+    geom_segment(aes(x = CI_low,
+                     xend = CI_high,
+                     yend = specific_annot)) +
+    scale_x_log10() +
+    geom_vline(xintercept = 1, color = "black", linetype = "dashed") +
+    ggrepel::geom_text_repel(aes(label = pval_txt)) +
+    theme_minimal() +
+    labs(x = "Palm / Control",
+         title = glue::glue("{pair} - Cell type OR change"))
+
+})
+
+cowplot::plot_grid(plotlist = OR_plots_ls,
+                   align = "hv",
+                   axis = "trbl")
+```
+
+Running Binomial Logistic Regression
+```{r fig.height=10, fig.width=30}
+OR_plots_ls <- lapply(pairs_ls, function(pair) {
+  print(pair)
+  # Extract sample id for those conditions
+  sample_id_vec <- metadata %>%
+    dplyr::filter(pairs == pair) %>%
+    dplyr::pull(sample_id) %>%
+    unique()
+  print(sample_id_vec)
+  
+  # Detect which cell types have 0 counts and remove them...
+  rm_ct <- metadata %>%
+    dplyr::filter(sample_id %in% sample_id_vec & count == 0) %>%
+    dplyr::pull(specific_annot) %>%
+    unique
+  
+  # Remove those cell types since the logistic regression can't handle it
+  df_a <- metadata %>%
+    dplyr::filter(sample_id %in% sample_id_vec &
+                    (! specific_annot %in% rm_ct))
+  
+  # Set formula 
+  formula <- cbind(count, other) ~ specific_annot * sample_id
+  model1 <- glm(formula = formula,
+                family = 'binomial',
+                data = df_a)
+  
+  emm1 <- emmeans::emmeans(model1,
+                  specs = revpairwise ~ sample_id | specific_annot)
+  c_results <- emm1$contrasts %>%
+    summary(infer = TRUE, type = 'response') %>%
+    rbind() %>%
+    as.data.frame() %>%
+    mutate(
+      p.value = signif(p.value, digits = 2),
+      pval_txt = glue::glue("P-value = {p.value}"),
+      specific_annot = stringr::str_wrap(string = specific_annot, width = 40)
+    )
+    
+  print(c_results)
+  # Plot OR
+  ggplot(data = c_results,
+         aes(x = odds.ratio,
+             y = specific_annot)) +
+    geom_point() +
+    geom_segment(aes(x = asymp.LCL,
+                     xend = asymp.UCL,
+                     yend = specific_annot)) +
+    scale_x_log10() +
+    geom_vline(xintercept = 1, color = "black", linetype = "dashed") +
+    ggrepel::geom_text_repel(aes(label = pval_txt)) +
+    theme_minimal() +
+    labs(x = "Palm / Control",
+         y = "",
+         title = glue::glue("{pair} - Cell type OR change"))
+})
+
+OR_grid <- cowplot::plot_grid(plotlist = OR_plots_ls,
+                   align = "hv",
+                   axis = "trbl")
+
+OR_grid
+
+"{palm_28}/{plt_dir}/OR_epid20.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = OR_grid,
+    base_height = 8,
+    base_width = 12)
+```
+
+### DE genes
+Next we are going to check DE genes between the same cell type across conditions - 1st xenograph vs 2nd xenograph
+```{r eval = FALSE}
+DE_df <- lapply(c("PLKO", "shCD36", "shGal", "Plko", "_shcD36_"), function(cond) {
+  print(cond)
+  keep <- stringr::str_detect(string = annot_se@meta.data[, "sample_id"],
+                              pattern = cond)
+  tmp_se <- annot_se[, keep]
+  
+  Seurat::Idents(tmp_se) <- tmp_se@meta.data[, "sample_id"]
+  diets <- sort(unique(tmp_se$sample_id))
+  print(diets)
+  
+  ct_ls <- unique(tmp_se$specific_annot)
+  df <- lapply(ct_ls, function(ct) {
+    print(ct)
+    se_sub <- tmp_se[, tmp_se$specific_annot == ct]
+    
+    if (ncol(table(se_sub@meta.data[, "specific_annot"],
+                   se_sub@meta.data[, "sample_id"])) == 2) {
+      markers <- Seurat::FindMarkers(object = se_sub,
+                                   ident.1 = diets[1],
+                                   ident.2 = diets[2])
+    } else {
+      markers <- data.frame(p_val = 1,
+                            avg_logFC = 0,
+                            pct.1 = 0,
+                            pct.2 = 0,
+                            p_val_adj = 1)
+    }
+    
+    markers$cell_type <- ct
+    markers$comparison <- sprintf("%s vs %s", diets[1], diets[2])
+    markers <- markers %>%
+      tibble::rownames_to_column("gene")
+    
+    return(markers)
+    # de_ls[[cond]][[ct]] <- markers
+  }) %>%
+    dplyr::bind_rows()
+}) %>% 
+  dplyr::bind_rows()
+
+saveRDS(object = DE_df,
+        file = here::here(sprintf("%s/%s/DE_diet.rds",
+                                  anot_28, robj_dir)))
+```
+
+```{r}
+DE_df <- readRDS(file = here::here(sprintf("%s/%s/DE_diet.rds",
+                                  anot_28, robj_dir)))
+
+DT::datatable(data = DE_df,
+              filter = "top")
+```
+
+Check if there are DE expressed genes in all cell types of the same condition
+```{r}
+intersect_genes <- lapply(unique(DE_df$comparison), function(cond) {
+  lapply(unique(DE_df$cell_type), function(ct){
+    DE_df %>%
+      dplyr::filter(comparison == cond & cell_type == ct) %>%
+      dplyr::pull("gene")
+  }) %>% 
+      purrr::reduce(., intersect)
+  
+})
+
+names(intersect_genes) <- unique(DE_df$comparison)
+```
+
+Show intersecting DE genes between the cell types of the same condition.
+```{r}
+intersect_genes_mod <- purrr::map(intersect_genes, ~ glue::glue_collapse(., ", "))
+max_len <- max(lengths(intersect_genes_mod))
+df <- do.call(cbind.data.frame, c(lapply(intersect_genes_mod, function(x) 
+               c(x, rep('', max_len - length(x)))), stringsAsFactors = FALSE))
+knitr::kable(df)
+```
+
+And now check if there are genes DE expressed intersecting across all conditions
+```{r}
+purrr::reduce(intersect_genes, intersect)
+```
+
+We also check if between the same comparison but in 2 different replicates we observe the same DE genes
+PLKO vs Plko
+```{r fig.height=6, fig.width=12, eval = FALSE}
+intersect(intersect_genes[["25-PLKOControlDiet vs 25-PLKOPalmDiet"]],
+          intersect_genes[["25_Plko_ct_diet vs 25_Plko_Palmdiet"]])
+
+ggVennDiagram(x = intersect_genes[c("25-PLKOControlDiet vs 25-PLKOPalmDiet",
+                                    "25_Plko_ct_diet vs 25_Plko_Palmdiet")])
+```
+
+shcD36 vs \_shcD36_
+```{r fig.height=6, fig.width=12, eval = FALSE}
+intersect(intersect_genes[["25-shCD36ControlDiet vs 25-shCD36PalmDiet"]],
+          intersect_genes[["25_shcD36_ctdiet vs 25_shcD36_PALM_diet"]])
+
+ggVennDiagram(x = intersect_genes[c("25-shCD36ControlDiet vs 25-shCD36PalmDiet",
+                                    "25_shcD36_ctdiet vs 25_shcD36_PALM_diet")])
+```
+
+Lastly we want to observe the intersection of DE genes for cell types of interest between replicates so as to determine which genes are DE expressed in both conditions.
+```{r}
+# Define comparisons of interest
+comparisons <- list()
+comparisons[["PLKO"]] <- c("25-PLKOControlDiet vs 25-PLKOPalmDiet",
+                           "25_Plko_ct_diet vs 25_Plko_Palmdiet")
+
+comparisons[["shCD36"]] <- c("25-shCD36ControlDiet vs 25-shCD36PalmDiet",
+                             "25_shcD36_ctdiet vs 25_shcD36_PALM_diet")
+
+# Define cell types of interest
+ct_interest <- c("nerve-associated Fibroblasts",
+                 "Retinol uptaking basal cells",
+                 "Lymphoid Endothelial Cells")
+```
+
+Show the intersecting DE genes in a table
+```{r}
+intersect_int <- lapply(comparisons, function(cond_ls) {
+  tmp_df <- lapply(ct_interest, function(ct){
+    repl1 <- DE_df %>%
+      dplyr::filter(comparison == cond_ls[[1]] & cell_type == ct) %>%
+      dplyr::pull("gene")
+    
+    repl2 <-  DE_df %>%
+      dplyr::filter(comparison == cond_ls[[2]] & cell_type == ct) %>%
+      dplyr::pull("gene")
+    
+    inter <- dplyr::intersect(repl1, repl2)
+    glue::glue_collapse(inter, ", ")
+  })
+  names(tmp_df) <- ct_interest
+  return(tmp_df)
+})
+
+max_len <- max(lengths(intersect_int))
+df_int <- do.call(cbind.data.frame, c(lapply(intersect_int, function(x) 
+               c(x, rep("", max_len - length(x)))), stringsAsFactors = FALSE))
+
+knitr::kable(df_int)
+```
+
+Show the results in a VennDiagram
+```{r fig.height=7, fig.width=21, eval = FALSE}
+intersect_venn <- lapply(comparisons, function(cond_ls) {
+  tmp_venn <- lapply(ct_interest, function(ct){
+    repl1 <- DE_df %>%
+      dplyr::filter(comparison == cond_ls[[1]] & cell_type == ct) %>%
+      dplyr::pull("gene")
+    
+    repl2 <-  DE_df %>%
+      dplyr::filter(comparison == cond_ls[[2]] & cell_type == ct) %>%
+      dplyr::pull("gene")
+    
+    tmp_ls <- list(repl1, repl2)
+    names(tmp_ls) <- cond_ls
+    ggVennDiagram(x = tmp_ls)
+  })
+})
+
+cowplot::plot_grid(plotlist = intersect_venn[[1]], nrow = 1)
+cowplot::plot_grid(plotlist = intersect_venn[[2]], nrow = 1)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

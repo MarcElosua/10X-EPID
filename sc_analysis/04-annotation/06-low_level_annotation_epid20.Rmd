@@ -1,0 +1,288 @@
+---
+title: "06-Low-Level Annotation"
+author: "Marc Elosua"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message=FALSE, warning = FALSE, fig.width = 8)
+# options(width = 1200)
+```
+
+## Introduction
+In this Rmarkdown document we are going to annotate the clusters at a more specific level.
+
+For a more specific annotation we can look at the [Tabula Muris](https://tabula-muris.ds.czbiohub.org/) dataset a compendium of 100,000 cells from 20 organs and tissues.
+
+## Libraries
+```{r warning = FALSE, message = FALSE}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(plotly)
+```
+
+## Parameters
+Here we will define and load objects and functions that will be used throughout the document.
+```{r}
+source(here::here("misc/paths.R"))
+```
+
+## Load data
+The data used in this Rmarkdown document comes from 03-integration_clustering/04-EPID_integration.Rmd
+We also load data of the median gene expression of the [mosue cell atlas]() by the Allan Brain Institute.
+```{r}
+merged_se <- "{clust_28}/{robj_dir}/harmony_se_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS()
+
+# atlas_expr <- readr::read_csv(file = "data/mouse_brain_atlas/medians.csv")
+```
+
+```{r}
+Seurat::FeaturePlot(merged_se,
+                    features = c("nCount_RNA",
+                                 "nFeature_RNA",
+                                 "pct_mt",
+                                 "pct_ribo"))
+
+Seurat::DimPlot(merged_se, group.by = "Phase")
+```
+
+## Analysis
+Start by Visualizing the different resolutions and pick a high-level clustering (low resolution)
+```{r fig.height = 8}
+feat_clust <- colnames(merged_se@meta.data)[
+  stringr::str_detect(
+    string = colnames(merged_se@meta.data),
+    pattern = "^SCT_snn_res")
+  ]
+
+dim_splt <- Seurat::DimPlot(object = merged_se,
+                group.by = c("SCT_snn_res.0.1",
+                             "SCT_snn_res.0.25"),
+                label = TRUE
+                # split.by = "orig.ident",
+                )
+dim_splt
+```
+
+```{r}
+
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("scrublet_doublet_scores",
+                                 "nCount_RNA",
+                                 "pct_ribo",
+                                 "pct_mt"
+                                 ),
+                    label = TRUE)
+
+dim_id <- Seurat::DimPlot(object = merged_se,
+                          group.by = "sample_id")
+
+dim_025 <- Seurat::DimPlot(object = merged_se,
+                group.by = "SCT_snn_res.0.25",
+                label = TRUE)
+
+plotly::ggplotly(dim_025)
+plotly::ggplotly(dim_id)
+```
+
+We will annotate the clusters obtained at a higher resolution - res = 0.1.
+
+### Find Markers
+```{r eval = FALSE}
+Seurat::Idents(merged_se) <- merged_se@meta.data[, "SCT_snn_res.0.1"]
+
+markers <- Seurat::FindAllMarkers(object = merged_se,
+                                  assay = "SCT",
+                                  slot = "data",
+                                  only.pos = TRUE)
+
+"{anot_28}/{robj_dir}/cluster_markers_SCT_snn_res.0.1.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = markers,
+    file = .)
+```
+
+Load markers
+```{r}
+markers <- "{anot_28}/{robj_dir}/cluster_markers_SCT_snn_res.0.1.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+DT::datatable(markers,
+              filter = "top")
+```
+
+Save marker list in excel file
+```{r}
+"{anot_28}/{robj_dir}/low-level_markers.csv" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readr::write_csv(
+    x = markers,
+    file = .)
+```
+
+Visualization of top marker genes with heatmap
+```{r fig.height = 18}
+top10 <- markers %>%
+  dplyr::filter(pct.1 > 0.75 & avg_log2FC > 0.75) %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::top_n(n = 10, wt = avg_log2FC)
+
+hm_10 <- Seurat::DoHeatmap(
+  merged_se,
+  features = top10$gene,
+  group.by = "SCT_snn_res.0.1"
+  ) +
+  NoLegend()
+
+"{anot_28}/{plt_dir}/low-level_top10_heatmap.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = hm_10,
+    base_width = 16,
+    base_height = 16
+  )
+
+hm_10
+```
+
+## Subset 0 & 1
+Since we could annotate all the small clusters at level 1 we are now interested in the L2 annotation of clusters 0 and 1. We start by subsetting the seurat object for these 2 clusters only and computing the marker genes for this new resolution
+```{r}
+se_01 <- subset(merged_se, subset = SCT_snn_res.0.01 %in% c(0, 1))
+metadata_01 <- se_01@meta.data
+metadata_01$specific_annot <- NA_character_
+
+Seurat::DimPlot(
+  object = se_01,
+  group.by = "SCT_snn_res.0.1"
+)
+```
+
+### Marker genes
+We are next going to recompute the marker genes just within this subset.
+```{r}
+Seurat::Idents(se_01) <- se_01@meta.data[, "SCT_snn_res.0.1"]
+
+markers <- Seurat::FindAllMarkers(object = se_01,
+                                  assay = "SCT",
+                                  slot = "data",
+                                  only.pos = TRUE)
+
+"{anot_28}/{robj_dir}/cluster_markers_ll01.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = markers,
+    file = .)
+```
+
+```{r}
+markers <- "{anot_28}/{robj_dir}/cluster_markers_ll01.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+```
+
+Furthermore we are going to use markers from the paper [Single cell transcriptomics of human epidermis identifies basal stem cell transition states](https://www.nature.com/articles/s41467-020-18075-7). Some of this can be appreciated in [Figure 1](https://www.nature.com/articles/s41467-020-18075-7).
+
+In short there are 5 main populations in the epidermis: \
+* Basal: *Krt14*, *Krt5* \
+* Spinous: *Krt1*, *Krt10*\
+* Granular: *Dsc1*, *Krt2*, *Ivl*\
+* Cornified - Not detected since they cannot be purified by the FACS sorting we did. \
+* Melanocytes: *Mitf*, *Mlana*\
+
+Visualization of top marker genes with heatmap
+```{r fig.height = 18}
+top10 <- markers %>%
+  dplyr::filter(pct.1 > 0.75 & avg_log2FC > 0.75) %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::top_n(n = 10, wt = avg_log2FC)
+
+Seurat::DoHeatmap(
+  se_01,
+  features = c(top10$gene, "Krt14", "Krt5", "Krt1", "Krt10",
+               "Dsc1", "Krt2", "Ivl", "Mitf", "Mlana"),
+  group.by = "SCT_snn_res.0.1"
+  ) +
+  NoLegend()
+```
+
+Right off the bat we see that cluster 6 corresponds to erithrocytes since it has *Hbb* and *Hba* genes expressed.
+
+Lets look at the genes one by one on the UMAP embedding
+```{r}
+Seurat::FeaturePlot(
+  object = se_01,
+  features = c("Krt14", "Krt5"),
+  label = TRUE)
+
+Seurat::FeaturePlot(
+  object = se_01,
+  features = c("Krt1", "Krt10"),
+  label = TRUE)
+
+Seurat::FeaturePlot(
+  object = se_01,
+  features = c("Dsc1", "Krt2", "Ivl"),
+  label = TRUE)
+
+Seurat::FeaturePlot(
+  object = se_01,
+  features = c("Mitf", "Mlana"),
+  label = TRUE)
+
+```
+
+We see how there is strong expression of *Krt14* and *Krt5* in all of these cells while the expression of the remaining cell types is residula compared,
+Therefore we can annotate cluster 0 as *Basal Cells* and cluster 1 as *Proliferating Basal Cells*
+Right off the bat we see that cluster 6 corresponds to erithrocytes since it has *Hbb* and *Hba* genes expressed.
+```{r}
+sp_annot <- metadata_01 %>%
+  dplyr::mutate(
+    specific_annot = dplyr::case_when(
+      SCT_snn_res.0.25 %in% c(5, 10) ~ "Erithrocytes",
+      SCT_snn_res.0.25 %in% c(0, 2, 3, 7, 9) ~ "Basal Cells",
+      SCT_snn_res.0.25 %in% c(1) ~ "Proliferating Basal Cells",
+      TRUE ~ specific_annot)
+  ) %>%
+  dplyr::select(specific_annot)
+
+table(sp_annot, useNA = "ifany")
+```
+
+### Save specific annotation
+```{r}
+"{anot_28}/{robj_dir}/specific_annotation.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = sp_annot,
+    file = .)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

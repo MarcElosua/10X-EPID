@@ -1,0 +1,245 @@
+---
+title: "04-EPID Integration"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# knitr::opts_knit$set(root.dir = "../..")
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message = FALSE, warning = FALSE, cache.lazy = TRUE,
+                      cache = TRUE)
+options(width = 1200)
+```
+
+## Introduction
+In this script we aim to integrate the different datasets. According to the benchmarking paper by [Jinmiao Chen](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1850-9):
+
+*Based on our results, Harmony, LIGER, and Seurat 3 are the recommended methods for batch integration. Due to its significantly shorter runtime,* ***Harmony*** *is recommended as the first method to try, with the other methods as viable alternatives.*
+
+Therefore, we are going to use [Harmony](https://www.nature.com/articles/s41592-019-0619-0.epdf?shared_access_token=rDg_Rd07lrFXExt_ySj7V9RgN0jAjWel9jnR3ZoTv0NfDJkKCfDV_X9Mq3lweQmKiXEXxhrebQRjJEZdc-xNv6-7ZN1XotlD_mo5TSS4Z4eWn-kUo6mBwA5dEAKlTfR8OT6E10MZY_E-906ajbzvgg%3D%3D) to integrate the datasets.
+
+[Harmony vignette](https://github.com/immunogenomics/harmony)
+[Harmony Seurat wrapper](https://htmlpreview.github.io/?https://github.com/satijalab/seurat.wrappers/blob/master/docs/harmony.html)
+
+## Libraries
+```{r}
+# library(devtools)
+# install.packages("devtools")
+# devtools::install_github("immunogenomics/harmony")
+
+library(Seurat)
+library(harmony)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(plotly)
+```
+
+## Set parameters
+```{r}
+source(here::here("misc/paths.R"))
+
+dir.create(path = sprintf("%s/%s", clust_28, plt_dir),
+           showWarnings = FALSE,
+           recursive = TRUE)
+
+dir.create(path = sprintf("%s/%s", clust_28, robj_dir),
+           showWarnings = FALSE,
+           recursive = TRUE)
+
+# Set seed to make the script reproducible
+set.seed(987)
+```
+
+## Load data
+We are going to load the data processed and filtered in *03-QC_common.Rmd*.
+With Harmony integration, we need to create only one Seurat object with all cells
+```{r}
+se_ls <- purrr::map(id_ls, ~ readRDS(file = here::here(glue::glue("{qc_28}/{robj_dir}/{.x}_qc.rds"))))
+
+# merge all the objects in the list
+merged_se <- purrr::reduce(se_ls, merge)
+```
+
+## Analysis
+
+Add sample labels
+```{r}
+metadata <- merged_se@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(id_df, c("orig.ident" = "gem_id")) %>%
+  tibble::column_to_rownames("barcode")
+
+merged_se@meta.data <- metadata
+```
+
+Preprocess data
+```{r}
+merged_se@assays$SCT <- NULL
+Seurat::DefaultAssay(merged_se) <- "RNA"
+merged_se <- Seurat::SCTransform(object = merged_se) %>%
+  Seurat::RunPCA(., verbose = FALSE)
+```
+
+Lets see if the PCs merge well using the uncorrected PCs
+```{r}
+p1 <- Seurat::DimPlot(object = merged_se,
+                      reduction = "pca",
+                      pt.size = .1,
+                      group.by = "sample_id")
+p1
+
+p2 <- Seurat::VlnPlot(object = merged_se,
+              features = "PC_1",
+              group.by = "sample_id",
+              pt.size = .1)
+p2
+```
+
+They all look quite good already prior to integration.
+To make sure that just merging the data proves to be sufficient we want to visualize the data in a UMAP
+```{r}
+Seurat::ElbowPlot(merged_se, ndims = 50)
+merged_test <- Seurat::FindNeighbors(merged_se, dims = 1:30) %>% 
+  Seurat::FindClusters(., resolution = c(0.1))
+
+merged_test <- Seurat::RunUMAP(merged_test, dims = 1:30)
+```
+
+```{r}
+Seurat::DimPlot(object = merged_test,
+                reduction = "umap",
+                pt.size = .1,
+                group.by = "orig.ident")
+```
+
+We see clusters but there is structure within the clusters corresponding to the data origin.
+We will then proceed to integrate the data using Harmony
+
+Start by selecting genes present in all the datasets
+```{r}
+# common_genes <- purrr::reduce(purrr::map(se_ls, rownames), intersect)
+```
+
+```{r}
+merged_se <- harmony::RunHarmony(merged_se,
+                                 group.by.vars = "orig.ident",
+                                 assay.use = "SCT",
+                                 reduction = "pca",
+                                 dims = 1:30)
+```
+
+Remove previously individually-computed clusterings
+```{r}
+merged_se@meta.data <- merged_se@meta.data %>%
+  dplyr::select(-starts_with("SCT_snn_res"))
+```
+
+Visualize integration result
+```{r}
+merged_se <- Seurat::FindNeighbors(merged_se,
+                                   reduction = "harmony",
+                                   dims = 1:30) %>%
+            Seurat::FindClusters(resolution = c(0.01, 0.05, 0.1,
+                                                0.25, 0.5, 0.75, 1))
+
+merged_se <- Seurat::RunUMAP(merged_se,
+                             reduction = "harmony",
+                             dims = 1:30)
+
+Seurat::Idents(merged_se) <- merged_se@meta.data[, "sample_id"]
+
+int_plt <- Seurat::DimPlot(merged_se,
+                           group.by = c("sample_id"),
+                           pt.size = 0.1)
+plotly::ggplotly(int_plt)
+```
+
+## Look at QC metrics
+We are going to assess how the QC metrics look on the harmony embedding
+
+### Basic QC
+```{r fig.height=8, fig.width=8}
+qc_plt <- Seurat::FeaturePlot(merged_se,
+                              features = c("nCount_RNA",
+                                           "nFeature_RNA",
+                                           "pct_mt",
+                                           "pct_ribo",
+                                           "scrublet_doublet_scores"),
+                              pt.size = .1)
+qc_plt
+```
+
+
+```{r fig.height=10, fig.width=15}
+dim_plt <- Seurat::DimPlot(merged_se,
+                          group.by = c("SCT_snn_res.0.01",
+                                       "SCT_snn_res.0.05",
+                                       "SCT_snn_res.0.1",
+                                       "SCT_snn_res.0.25",
+                                       "SCT_snn_res.0.5",
+                                       "SCT_snn_res.0.75",
+                                       "SCT_snn_res.1"),
+                          pt.size = .1)
+dim_plt
+
+Seurat::DimPlot(merged_se,
+                group.by = c("SCT_snn_res.0.01",
+                             "SCT_snn_res.0.25"),
+                pt.size = 1,
+                label = TRUE)
+
+table(merged_se$SCT_snn_res.0.25)
+```
+
+
+```{r fig.height=8, fig.width=8}
+plt1 <- Seurat::FeaturePlot(merged_se,
+                            features = c("nCount_RNA"),
+                            pt.size = 1)
+
+plt2 <- Seurat::DimPlot(merged_se,
+                        group.by = "Phase",
+                        pt.size = 1)
+
+plt3 <- Seurat::DimPlot(merged_se,
+                        group.by = "SCT_snn_res.0.1",
+                        pt.size = 1,
+                        label = TRUE) + theme(legend.position = "none")
+
+cowplot::plot_grid(plt1, plt2, plt3, ncol = 2)
+
+# Seurat::FeaturePlot(merged_se, features = c("Vim", "Cd36"))
+```
+
+### Assess doublets
+```{r}
+scrublet_plt <- Seurat::FeaturePlot(merged_se,
+                                    features = "scrublet_doublet_scores",
+                                    pt.size = 1)
+plotly::ggplotly(scrublet_plt)
+```
+
+## Save Harmony dataset
+```{r}
+# saveRDS(object = merged_se,
+#         file = here::here(sprintf("%s/%s/harmony_se.rds",
+#                        clust_28, robj_dir)))
+
+"{clust_28}/{robj_dir}/harmony_se_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = merged_se,
+    file = .)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,262 @@
+---
+title: "07-Join Annotation"
+author: "Marc Elosua"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message = FALSE, warning = FALSE, fig.width = 8)
+# options(width = 1200)
+```
+
+## Introduction
+In this Rmarkdown document we are going to join the annotations and plot marker gene violin plots.
+
+## Libraries
+```{r warning = FALSE, message = FALSE}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(plotly)
+```
+
+## Parameters
+Here we will define and load objects and functions that will be used throughout the document.
+```{r}
+source(here::here("misc/paths.R"))
+```
+
+## Load data
+The data used in this Rmarkdown document comes from 03-integration_clustering/04-EPID_integration.Rmd
+```{r}
+# General annotation
+merged_se <- "{anot_28}/{robj_dir}/harmony_se_general.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# Specific annotation
+sp_annot <- "{anot_28}/{robj_dir}/specific_annotation.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+table(sp_annot$specific_annot)
+```
+
+## Analysis
+Join the specific annotation to the seurat object
+```{r}
+merged_se@meta.data <- merged_se@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(sp_annot %>%
+                     tibble::rownames_to_column("barcode"),
+                   by = "barcode") %>%
+  dplyr::mutate(
+    specific_annot = dplyr::if_else(is.na(specific_annot),
+                                    general_annot,
+                                    specific_annot)
+    # specific_annot = general_annot
+  ) %>%
+  tibble::column_to_rownames("barcode")
+table(merged_se$specific_annot)
+table(merged_se$general_annot)
+
+```
+
+Add a bit of cluster substructure in the basal cluster for the deconvolution:
+```{r}
+Seurat::DimPlot(object = merged_se[, merged_se$specific_annot == "Basal Cells"], group.by = "SCT_snn_res.0.25")
+Seurat::DimPlot(object = merged_se, group.by = c("SCT_snn_res.0.25", "specific_annot"), label = TRUE)
+
+merged_se@meta.data <- merged_se@meta.data %>%
+  dplyr::mutate(
+    specific_annot_mod = dplyr::case_when(
+      SCT_snn_res.0.25 == 0 ~ "Basal Cells - 1",
+      SCT_snn_res.0.25 == 1 ~ "Proliferating Basal Cells",
+      SCT_snn_res.0.25 == 2 ~ "Basal Cells - 2",
+      SCT_snn_res.0.25 == 3 ~ "Basal Cells - 3",
+      SCT_snn_res.0.25 == 4 ~ "Lymphoid Endothelial",
+      SCT_snn_res.0.25 == 5 ~ "Erithrocytes",
+      SCT_snn_res.0.25 == 6 ~ "Vascular Endothelial",
+      SCT_snn_res.0.25 == 7 ~ "Basal Cells - 4",
+      SCT_snn_res.0.5 == 14 ~ "Tumour-associated Schwann Cells",
+      SCT_snn_res.0.5 == 15 ~ "SMC", 
+      SCT_snn_res.0.25 == 9 ~ "Basal Cells - 5",
+      SCT_snn_res.0.25 == 10 ~ "Erithrocytes",
+      )
+    )
+Seurat::DimPlot(object = merged_se, group.by = c("specific_annot_mod"), label = TRUE)
+
+```
+
+Since ribosomal are poor quality cells we remove them
+```{r}
+merged_se <- subset(merged_se, subset = specific_annot != "Ribosomal")
+```
+
+Look at the new annotation
+```{r}
+Seurat::DimPlot(
+  merged_se,
+  group.by = "specific_annot")
+```
+
+### Violin plots
+Next we are going to plot Violin plots for the expression of marker genes that differentiate the cell types in this dataset
+```{r}
+ct_order <- c("Basal Cells", "Proliferating Basal Cells", "Lymphoid Endothelial",
+              "Vascular Endothelial", "Tumour-associated Schwann Cells", "SMC",
+              "Erithrocytes")
+
+gene_ls <- c("Krt14", "Krt5", # Basal epidermis cells
+             "Top2a", "Mki67", # Proliferation
+             "Ccl21a", "Lyve1", # Lymphoid endothelial
+             "Flt1", "Vcam1", # Vascular endothelial
+             "Apod", "Ecm1", # Tumour-associated Schwann cells
+             "Tagln", "Acta2", # SMC
+             "Hba-a1", "Hbb-bt") # Erithrocytes
+
+count_int <- Seurat::GetAssayData(
+  object = merged_se,
+  assay = "SCT",
+  slot = "data") %>%
+  .[gene_ls, ] %>%
+  as.matrix(.) %>%
+  t() %>%
+  data.frame(.,check.names = FALSE) %>% 
+  tibble::rownames_to_column("barcode")
+
+vln_plt <- merged_se@meta.data %>%
+  dplyr::select(specific_annot) %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(count_int, by = "barcode") %>%
+  tibble::column_to_rownames("barcode") %>%
+  tidyr::pivot_longer(
+    cols = dplyr::all_of(gene_ls),
+    names_to = "gene",
+    values_to = "expr") %>%
+  dplyr::mutate(
+    gene = factor(gene, levels = gene_ls),
+    specific_annot = factor(specific_annot, levels = ct_order)
+  ) %>%
+  ggplot2::ggplot(., 
+                  aes(
+                    x = specific_annot,
+                    y = expr,
+                    fill = specific_annot,
+                    color = specific_annot)) +
+  ggplot2::geom_violin() +
+  ggplot2::facet_wrap(. ~ gene, ncol = 2, scales = "free_y") +
+  ggplot2::labs(fill = "", color = "", y = "Normalized Expression", x = "") +
+  ggplot2::theme_classic() +
+  ggplot2::theme(
+     strip.background = ggplot2::element_blank(),
+     strip.text = ggplot2::element_text(face = "bold"),
+     axis.text.x = ggplot2::element_text(
+       angle = 60,
+       hjust = 1,
+       vjust = 1))
+
+vln_plt
+
+"{anot_28}/{plt_dir}/vln_plot_markers_epid20.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = vln_plt,
+    base_height = 20,
+    base_width = 12)
+```
+
+### Feature plots
+We will also plot the feature plots of these genes
+```{r}
+library(RColorBrewer)
+feat_plt <- Seurat::FeaturePlot(object = merged_se,
+                    features = gene_ls) &
+  Seurat::NoLegend() & 
+  ggplot2::scale_colour_gradientn(
+    colours = RColorBrewer::brewer.pal(n = 11, name = "YlOrRd"))
+
+"{anot_28}/{plt_dir}/feat_plot_markers_epid20.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = feat_plt,
+    base_height = 15,
+    base_width = 15)
+
+```
+
+### Save marker genes
+First of all we need to compute the markers for the cell types using `Seurat's` funtion `FindAllMarkers`.
+```{r}
+Seurat::Idents(merged_se) <- merged_se$specific_annot
+sc_markers <- Seurat::FindAllMarkers(
+  object = merged_se,
+  assay = "SCT",
+  slot = "data",
+  only.pos = TRUE)
+
+"{anot_28}/{robj_dir}/markes_specific_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = sc_markers,
+    file = .)
+```
+
+Load the markers so we don't have to compure them redundantly
+```{r eval = FALSE}
+sc_markers <- "{anot_28}/{robj_dir}/markes_specific_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# sc_markers <- readRDS(file = here::here(glue::glue("{map_27}/{robj_dir}/
+#                                             markes_specific.rds")))
+
+markers_fn <- "{anot_28}/{robj_dir}/markers_update.xlsx" %>%
+  glue::glue() %>%
+  here::here()
+
+# Write results to spreadsheet, each cluster in a new sheet
+lapply(unique(sc_markers$cluster), function(clust) {
+  xlsx::write.xlsx(
+    x = sc_markers %>%
+      dplyr::filter(cluster == clust) %>%
+      dplyr::arrange(dplyr::desc(avg_log2FC)),
+    file = markers_fn,
+    sheetName = glue::glue("Cluster {clust}"),
+    row.names = FALSE,
+    append = file.exists(markers_fn))
+})
+```
+
+## Save data
+```{r}
+"{anot_28}/{robj_dir}/harmony_se_annot.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = merged_se,
+    file = .)
+
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

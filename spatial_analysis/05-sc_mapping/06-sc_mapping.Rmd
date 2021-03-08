@@ -1,0 +1,220 @@
+---
+author: "Marc Elosua-Bayes"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+params: 
+    sample_id: "Default!"
+    donor_id: "Default!"
+title: "`r sprintf('%s Clustering', params$donor_id)`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+This script is set to map the annotated SC dataset on to the spatial transcriptomics Visium slide.
+In this script we use the Visium data coming from *03-Clustering/03-clustering* and the SC data comming from *sc_analysis/04-annotation/11-join_annotation.Rmd* and *sc_analysis/04-annotation/05-low_level_annotation.Rmd*.
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(Matrix)
+library(SPOTlight)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+set.seed(123)
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+
+"{map_27}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{map_27}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+```
+
+```{r}
+sample_id <- params$sample_id
+# sample_id <- "ivuznh_s8xyfv"
+donor_id <- qc_dict[[sample_id]][["sample_id"]]
+```
+
+## Load data
+We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
+```{r}
+# 03-Clustering/03-clustering
+sp_obj <- "{clust_27}/{robj_dir}/clust_se_{sample_id}.RDS" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# *sc_analysis/04-annotation/07-join_annotation.Rmd
+sc_obj <- "{anot_28}/{robj_dir}/harmony_se_annot.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+```
+
+## Analysis
+
+First of all we need to compute the markers for the cell types using `Seurat's` funtion `FindAllMarkers`.
+```{r eval = FALSE}
+Seurat::Idents(sc_obj) <- sc_obj$specific_annot_mod
+sc_markers <- Seurat::FindAllMarkers(
+  object = sc_obj,
+  assay = "SCT",
+  slot = "data",
+  only.pos = TRUE)
+
+"{map_27}/{robj_dir}/markes_spotlight_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = sc_markers,
+    file = .)
+
+sc_markers <- "{map_27}/{robj_dir}/markes_spotlight_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+```
+
+Load the markers so we don't have to compure them redundantly
+```{r}
+sc_markers <- "{map_27}/{robj_dir}/markes_spotlight_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+
+# sc_markers <- readRDS(file = here::here(glue::glue("{map_27}/{robj_dir}/
+#                                             markes_specific.rds")))
+
+```
+
+Remove Erithrocytes and Proliferating Basal cells since the former is not of interest to the tissue and the latter can have mixed signatures with proliferating tumor cells since we don't have them in the data. 
+```{r}
+sc_obj <- sc_obj[, ! sc_obj$specific_annot_mod %in% c("Erithrocytes")]
+
+sc_markers <- sc_markers[! sc_markers$cluster %in% c("Erithrocytes"), ]
+```
+
+Before carrying out the deconvolution we need to adapt the gene names of the sc matrix adding *mm10---* in front.
+```{r}
+new_rn <- glue::glue("mm10---{rownames(sc_obj@assays$RNA@counts)}")
+adapt_mtrx <- sc_obj@assays$RNA@counts
+rownames(adapt_mtrx) <- new_rn
+
+se_mod <- Seurat::CreateSeuratObject(
+  counts = adapt_mtrx,
+  meta.data = sc_obj@meta.data)
+```
+
+Same thing with marker genes
+```{r}
+sc_markers$gene <- glue::glue("mm10---{sc_markers$gene}")
+```
+
+### Deconvolution
+Run deconvolution using the scRNAseq and the spatial transcriptomics data
+```{r}
+decon_mtrx_ls <- SPOTlight::spotlight_deconvolution(
+  se_sc = se_mod,
+  counts_spatial = sp_obj@assays$Spatial@counts,
+  clust_vr = "specific_annot_mod",
+  cluster_markers = sc_markers,
+  cl_n = 100,
+  hvg = 3000,
+  ntop = NULL,
+  transf = "uv",
+  method = "nsNMF",
+  min_cont = 0,
+  assay = "RNA",
+  slot = "counts")
+```
+
+### Assess deconvolution
+Before even looking at the deconvoluted spots we can gain insight on how well the model performed by looking at the topic profiles for the cell types.
+
+```{r}
+nmf_mod <- decon_mtrx_ls[[1]]
+decon_mtrx <- decon_mtrx_ls[[2]]
+
+rownames(decon_mtrx) <- colnames(sp_obj)
+```
+
+The first thing we can do is look at how specific the topic profiles are for each cell type.
+```{r fig.width=10, fig.height=8}
+h <- NMF::coef(nmf_mod[[1]])
+rownames(h) <- paste("Topic", 1:nrow(h), sep = "_")
+topic_profile_plts <- SPOTlight::dot_plot_profiles_fun(
+  h = h,
+  train_cell_clust = nmf_mod[[2]])
+
+topic_profile_plts[[2]] + theme(axis.text.x = element_text(angle = 90), 
+                                axis.text = element_text(size = 12))
+```
+
+Next we can take a look at the how the individual topic profiles of each cell within each cell-type behave. Here we expect that all the cells from the same cell type show a similar topic profile distribution, if not there might be a bit more substructure in that cluster and we may only be capturing one or the other.
+
+```{r fig.width=20, fig.height=20}
+topic_profile_plts[[1]] + theme(axis.text.x = element_text(angle = 90), 
+                                axis.text = element_text(size = 12))
+```
+
+Lastly we can take a look at which genes are the most important for each topic and therefore get an insight into which genes are driving them.
+```{r}
+basis_spotlight <- data.frame(NMF::basis(nmf_mod[[1]]))
+
+colnames(basis_spotlight) <- unique(stringr::str_wrap(nmf_mod[[2]], width = 30))
+
+DT::datatable(round(basis_spotlight, 5),
+              filter = "top")
+```
+
+## Save deconvolution
+```{r}
+# saveRDS(object = decon_mtrx_ls,
+#         file = here::here(glue::glue("{map_27}/{robj_dir}/decon_mtrx_epid_{sample_id}.rds")))
+
+"{map_27}/{robj_dir}/decon_mtrx_epid_{sample_id}_v2.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = decon_mtrx_ls,
+    file = .)
+```
+
+
+## Session Info
+```{r}
+sessionInfo()
+```
+

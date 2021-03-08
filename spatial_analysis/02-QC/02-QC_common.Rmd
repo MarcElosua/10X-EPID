@@ -1,0 +1,206 @@
+---
+author: "Marc Elosua-Bayes"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: html_document
+params: 
+    sample_id: "Default!"
+title: "`r sprintf('%s QC', params$sample_id)`"
+---
+
+---
+title: `r params$sample_id`
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+This script is set to carry out QC visualization and filtering of Visium slides so as to prepare them for subsequent analysis.
+We use as a reference QC workflow the one shown in [STutility](https://ludvigla.github.io/STUtility_web_site/Quality_Control.html) 
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+plt_dir <- sprintf("%s/%s", qc_27, plt_dir)
+robj_dir <- sprintf("%s/%s", qc_27, robj_dir)
+
+dir.create(path = here::here(plt_dir),
+           showWarnings = FALSE,
+           recursive = TRUE)
+
+dir.create(path = here::here(robj_dir),
+           showWarnings = FALSE,
+           recursive = TRUE)
+```
+
+```{r}
+sample_id <- params$sample_id
+# sample_id <- "s2yq8o_t5hk8u"
+# THRESHOLDS
+# min_lib_size <- 500
+# min_n_genes <- 50
+# max_pct_mt <- 50
+# min_cells <- 8
+min_lib_size <- qc_dict[[sample_id]][["min_lib_size"]]
+min_n_genes <- qc_dict[[sample_id]][["min_n_genes"]]
+max_pct_mt <- qc_dict[[sample_id]][["max_pct_mt"]]
+min_cells <- qc_dict[[sample_id]][["min_cells"]]
+```
+
+## Load data
+We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
+```{r}
+spaceranger_data <- sprintf("%s/%s/outs",
+                           spaceranger, sample_id)
+
+se_obj <- Seurat::Load10X_Spatial(data.dir = here::here(spaceranger_data),
+                                  filename = "filtered_feature_bc_matrix.h5",
+                                  assay = "Spatial",
+                                  slice = sample_id,
+                                  filter.matrix = TRUE)
+```
+
+Add mitochondrial and ribosomal %
+```{r}
+# Collect all genes coded on the mitochondrial genome
+se_obj[["percent.mito"]] <- Seurat::PercentageFeatureSet(
+  object = se_obj,
+  pattern = "^GRCh38-MT|^mm10---mt-")
+summary(se_obj[["percent.mito"]])
+
+# Collect all genes coding for ribosomal proteins
+se_obj[["percent.ribo"]] <- Seurat::PercentageFeatureSet(
+  object = se_obj,
+  pattern = "^GRCh38-RPL|^GRCh38-RPS|^mm10---Rpl|^mm10---Rps")
+
+summary(se_obj[["percent.ribo"]])
+```
+
+Add sample-id
+```{r}
+se_obj[["sample_id"]] <- qc_dict[[sample_id]][["sample_id"]]
+```
+
+## QC Analysis
+
+### Remove empty genes
+We start by removing those genes that aren't expressed in any of the spots overlaying the tissue
+```{r}
+table(rowSums(as.matrix(se_obj@assays$Spatial@counts)) == 0)
+
+keep_genes <- rowSums(as.matrix(se_obj@assays$Spatial@counts)) != 0
+se_obj <- se_obj[keep_genes, ]
+```
+
+### Basic features
+Next we plot some basic features that will help us visualize and define filtering options.
+```{r}
+plt_ls <- qc_hist_plots(se = se_obj,
+                        nfeat = "nFeature_Spatial",
+                        ncount = "nCount_Spatial",
+                        slot = "counts",
+                        assay = "Spatial",
+                        percent.mito = "percent.mito",
+                        percent.ribo = "percent.ribo")
+
+cowplot::plot_grid(plotlist = plt_ls, ncol = 2)
+```
+
+Next, lets look at how these features are distributed spatially.
+```{r}
+plt_st_ls <- qc_st_plots(se = se_obj,
+                         nfeat = "nFeature_Spatial",
+                         ncount = "nCount_Spatial",
+                         slot = "counts",
+                         assay = "Spatial",
+                         percent.mito = "percent.mito",
+                         percent.ribo = "percent.ribo")
+
+cowplot::plot_grid(plotlist = plt_st_ls, ncol = 2)
+```
+
+### Feature covariation
+Next we look at how these features covariate.
+```{r}
+plt_covar_ls <- qc_covar_plots(se = se_obj,
+                               nfeat = "nFeature_Spatial",
+                               ncount = "nCount_Spatial",
+                               slot = "counts",
+                               assay = "Spatial",
+                               percent.mito = "percent.mito",
+                               percent.ribo = "percent.ribo")
+
+cowplot::plot_grid(plotlist = plt_covar_ls, ncol = 2)
+```
+
+## % of mouse reads per spot
+To compute the ratio of mouse vs human genes we are going to compute:
+*(total number of mouse reads) / (total number of reads)*
+```{r}
+mm_genes <- grepl(pattern = "^mm10",
+                 x = rownames(se_obj@assays$Spatial@counts))
+
+mouse_mtrx <- as.matrix(se_obj@assays$Spatial@counts[mm_genes, ])
+total_mtrx <- as.matrix(se_obj@assays$Spatial@counts)
+
+se_obj[["percent.mouse"]] <- colSums(mouse_mtrx) / colSums(total_mtrx)
+
+Seurat::SpatialFeaturePlot(object = se_obj,
+                           features = "percent.mouse")
+```
+
+
+## Filtering spots
+```{r}
+if (sample_id == "s2yq8o_t5hk8u") {
+  qc_message <- "We need to filter out spots overlapping the tissue."
+} else {
+  qc_message <- "No need to fitler out any bad quality spots."
+  }
+```
+
+`r qc_message`
+
+```{r eval = FALSE}
+if (sample_id == "s2yq8o_t5hk8u") {
+  readr::read_table(file = here::here(glue::glue("{qc_27}/{robj_dir}/")))
+  coord <- se_obj@images$s2yq8o_t5hk8u@coordinates[, c("imagerow", "imagecol")]
+  
+  mask <- which(coord$imagerow > 200 & coord$imagerow < 3000)
+  keep_spots <- rownames(coord[mask, ])
+  se_obj <- se_obj[, keep_spots]
+  
+  plotly::plot_ly(coord, x = ~imagecol, y = ~imagerow)
+}
+```
+
+## Save RDS
+Save the object to use downstream.
+```{r}
+saveRDS(object = se_obj,
+        file = here::here(sprintf("%s/qc_se_%s.rds",
+                                  robj_dir, sample_id)))
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```
+

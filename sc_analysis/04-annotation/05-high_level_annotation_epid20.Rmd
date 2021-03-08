@@ -1,0 +1,440 @@
+---
+title: "05-High-Level Annotation"
+author: "Marc Elosua"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: yes
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center',
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+In this Rmarkdown document we are going to annotate the clusters at a general level.
+
+## Libraries
+```{r warning = FALSE, message = FALSE}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(plotly)
+```
+
+## Parameters
+Here we will define and load objects and functions that will be used throughout the document.
+```{r}
+source(here::here("misc/paths.R"))
+
+"{anot_28}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{anot_28}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+```
+
+## Load data
+The data used in this Rmarkdown document comes from 03-integration_clustering/04-EPID_integration.Rmd
+We also load data of the median gene expression of the [mosue cell atlas]() by the Allan Brain Institute.
+```{r}
+# merged_se <- readRDS(file = here::here(sprintf("%s/%s/harmony_se.rds",
+#                                     clust_28, robj_dir)))
+
+merged_se <- "{clust_28}/{robj_dir}/harmony_se_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS()
+
+Seurat::Idents(merged_se) <- merged_se@meta.data[, "SCT_snn_res.0.01"]
+
+# atlas_expr <- readr::read_csv(file = here::here("data/mouse_brain_atlas/medians.csv"))
+merged_se[["general_annot"]] <- NA_character_
+```
+
+## Analysis
+Start by Visualizing the different resolutions and pick a high-level clustering (low resolution)
+```{r fig.height = 18}
+feat_clust <- colnames(merged_se@meta.data)[
+  stringr::str_detect(
+    string = colnames(merged_se@meta.data),
+    pattern = "^SCT_snn_res")
+  ]
+
+all_res <- Seurat::DimPlot(object = merged_se,
+                group.by = feat_clust,
+                label = TRUE) &
+  theme(legend.position = "none")
+all_res
+
+Seurat::Idents(merged_se) <- merged_se@meta.data[, "SCT_snn_res.0.05"]
+```
+
+We will start checking the clusters obtained at the lowest resolution - res = 0.01.
+
+### Find Markers
+```{r eval = FALSE}
+Seurat::Idents(merged_se) <- merged_se@meta.data[, "SCT_snn_res.0.05"]
+
+markers <- Seurat::FindAllMarkers(object = merged_se,
+                                  assay = "SCT",
+                                  slot = "data",
+                                  only.pos = TRUE)
+
+"{anot_28}/{robj_dir}/cluster_markers_SCT_snn_res.0.05_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>% 
+  saveRDS(
+    object = markers,
+    file = .)
+```
+
+Save marker list in excel file
+```{r}
+markers <- "{anot_28}/{robj_dir}/cluster_markers_SCT_snn_res.0.05_epid20.rds" %>%
+  glue::glue() %>%
+  here::here() %>% 
+  readRDS(file = .)
+
+DT::datatable(markers,
+              filter = "top")
+
+"{anot_28}/{robj_dir}/high-level_markers_epid20.csv" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readr::write_csv(
+    x = markers,
+    path = .)
+```
+
+Visualization of top marker genes with heatmap
+```{r fig.height = 16}
+top20 <- markers %>%
+  dplyr::filter(pct.1 > 0.75) %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::top_n(n = 20, wt = avg_log2FC)
+
+hm_20 <- Seurat::DoHeatmap(
+  merged_se,
+  features = top20$gene,
+  group.by = "SCT_snn_res.0.05"
+  ) +
+  Seurat::NoLegend()
+
+hm_20
+```
+
+[Heatmap Atlas](https://celltypes.brain-map.org/rnaseq/mouse_ctx-hip_smart-seq)
+
+```{r eval = FALSE}
+lapply(unique(top20$cluster), function(clust) {
+  tmp <- top20 %>% dplyr::filter(cluster == clust)
+  gene_sel <- tmp$gene[tmp$gene %in% colnames(atlas_expr)]
+  atlas_expr_int <- atlas_expr[, c("cluster_label", gene_sel)]
+  
+  atlas_expr_int %>%
+    dplyr::filter(!is.na(cluster_label)) %>% 
+    tibble::column_to_rownames("cluster_label") %>%
+    as.matrix(.) %>% 
+    heatmap(x = .,
+            scale = "column",
+            main = sprintf("Heatmap Cluster %s", clust))
+})
+```
+
+Lets see how markers of interest map in the UMAP embedding
+
+#### Cluster 0:
+If we look at the [tabula muris](https://tabula-muris.ds.czbiohub.org/)
+Tongue keratinocyte markers: Krtdap, Sbsn, Krt16, Ly6d, Fam25c,Spink5
+```{r}
+# Tongue keratinocyte
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("Krtdap",
+                                 "Sbsn",
+                                 "Krt16",
+                                 "Ly6d",
+                                 "Fam25c",
+                                 "Spink5"
+                                 ),
+                    slot = "data",
+                    label = TRUE)
+```
+
+Basal epidermis tongue: Krt5, 2610528A11Rik, Ccl20, Tmprss11a 
+```{r}
+# Basal epidermis tongue
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("Krt5",
+                                 "2610528A11Rik",
+                                 "Ccl20",
+                                 "Tmprss11a"
+                                 ),
+                    slot = "data",
+                    label = TRUE)
+```
+
+```{r}
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.05 == 0,
+  "Basal Cells",
+  merged_se$general_annot)
+```
+
+#### Cluster 1:
+```{r}
+Seurat::DimPlot(merged_se, group.by = "Phase")
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("Hist1h1b",
+                                 "Top2a",
+                                 "Hmgb2",
+                                 "Prc1",
+                                 "Stmn1"
+                                 ),
+                    slot = "data",
+                    label = TRUE)
+```
+* **Hist1h1b**: Histone H1 protein binds to linker DNA between nucleosomes forming the macromolecular structure known as the chromatin fiber.
+* **Top2a**:Control of topological states of DNA by transient breakage and subsequent rejoining of DNA strands. Topoisomerase II makes double-strand breaks.
+* **Hmgb2**: Proposed to be involved in the innate immune response to nucleic acids by acting as a cytoplasmic promiscuous immunogenic DNA/RNA sensor which cooperates with subsequent discriminative sensing by specific pattern recognition receptors (PubMed:19890330). In the extracellular compartment acts as a chemokine. Promotes proliferation and migration of endothelial cells implicating AGER/RAGE (By similarity). Has antimicrobial activity in gastrointestinal epithelial tissues (By similarity). Involved in inflammatory response to antigenic stimulus coupled with proinflammatory activity (PubMed:25306442).
+* **Prc1**: Key regulator of cytokinesis that cross-links antiparrallel microtubules at an average distance of 35 nM. Essential for controlling the spatiotemporal formation of the midzone and successful cytokinesis.
+* **Stmn1**:Involved in the regulation of the microtubule (MT) filament system by destabilizing microtubules. Prevents assembly and promotes disassembly of microtubules. Phosphorylation at Ser-16 may be required for axon formation during neurogenesis.
+* **Ube2c**: Acts as an essential factor of the anaphase promoting complex/cyclosome (APC/C), a cell cycle-regulated ubiquitin ligase that controls progression through mitosis.
+
+```{r}
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.05 == 1,
+  "Proliferating Basal Cells",
+  merged_se$general_annot)
+```
+
+
+#### Cluster 3
+Lymphoid Endothelial cell markers
+```{r}
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("Flt4",
+                                 "Ccl21a",
+                                 "Prox1",
+                                 "Lyve1",
+                                 "Pdpn"
+                                 ),
+                    slot = "data",
+                    label = TRUE)
+```
+
+**Lymphatic system**
+* *Flt4*: instructions for making a protein called vascular endothelial growth factor receptor 3 (VEGFR-3), which regulates the development and maintenance of the lymphatic system.
+* *Ccl21a*: Inhibits hemopoiesis and stimulates chemotaxis. Chemotactic in vitro for thymocytes and activated T-cells, but not for B-cells, macrophages, or neutrophils. Potent mesangial cell chemoattractant. Shows preferential activity towards naive T-cells. May play a role in mediating homing of lymphocytes to secondary lymphoid organs.
+* *Prox1*: Plays a critical role in embryonic development and functions as a key regulatory protein in neurogenesis and the development of the heart, eye lens, liver, pancreas and the lymphatic system.
+* *Lyve1*: mediating its uptake for catabolism within lymphatic endothelial cells themselves, or its transport into the lumen of afferent lymphatic vessels for subsequent re-uptake and degradation in lymph nodes
+* *Pdpn*: Mediates effects on cell migration and adhesion through its different partners. During development plays a role in blood and lymphatic vessels separation by binding CLEC1B, triggering CLEC1B activation in platelets and leading to platelet activation and/or aggregation
+* *Mmrn1*: soluble protein found in platelets and in the endothelium of blood vessels, may function as a carrier protein for platelet factor V.
+
+Cluster 3 can be annotated as Lymphoid endothelial
+```{r}
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.05 == 3,
+  "Lymphoid Endothelial",
+  merged_se$general_annot)
+```
+
+#### Cluster 4
+Vascular Endothelial cell markers
+Cluster 4 expresses intercellular adhesion moleculas *cd93*, *Icam1* and *Vcam1* as well as endothelial vascular growth factors as *Flt1* (VEGFR family), Endothelial cell-selective adhesion molecule *Esam*.
+```{r}
+Seurat::FeaturePlot(merged_se,
+                    features = c("Cd93",
+                                 "Icam1",
+                                 "Vcam1",
+                                 "Flt1",
+                                 "Esam",
+                                 "Cd36"
+                                 ),
+                    pt.size = 0.5,
+                    slot = "data",
+                    label = TRUE)
+```
+
+Cluster 4 can be annotated as endothelial
+```{r}
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.05 == 4,
+  "Vascular Endothelial",
+  merged_se$general_annot)
+```
+
+#### Cluster 5
+Markers from this cluster are either nerve-associated fibroblasts or non-myelinating Schwan cells
+
+Nerve-associated fibroblasts markers from [Redefining the heterogeneity of peripheral nerve cells in health and autoimmunity](https://doi.org/10.1073/pnas.1912139117)
+*An additional cluster expressed fibroblast markers (fibro; Fn1, Fgfr1, Col1a, and Col3a)*
+
+*The fibro cluster expressed a variety of extracellular matrix (ECM) components (Dpt and Gsn) including specific collagen genes (Col1a1, Col1a2, Col3a1, and Col14a1) (Fig. 1D and SI Appendix, Table S2). GSEA accordingly identified pathways associated with ECM formation (SI Appendix, Table S7). The cluster also expressed marker genes (Pi16, Clec3b, and Cygb) and TFs (Prrx1 and Aebp1) (Fig. 1E and SI Appendix, Table S2), that were previously identified in matrix fibroblasts (8). This supports the idea that the fibro cluster represents nerve-associated fibroblasts (3) with a specific matrix fibroblast phenotype. In this cluster we newly identified Sfrp4—a known regulator of the Wnt signaling pathway (35) (Fig. 1 D and E and SI Appendix, Table S2)—and multiple members of the IGF signaling pathway (Igfbp6, Igfbp4, and Igfbp5) and a single complement component (C3) that is known to inhibit axonal outgrowth (36). This suggests that nerve-associated fibroblasts could coregulate axonal growth.*
+```{r fig.height = 16}
+fibro_markers <- c("Fn1", "Fgfr1", "Sfrp4", "Pi16",
+                   "Dpt", "Dcn", "Gsn", "Col1a1", "Col1a2", "Col3a1",
+                   "Col14a1", "Clec3b", "Cygb", "Prrx1", "Aebp1",
+                   "Sfrp4", "Igfbp6", "Igfbp4", "Igfbp5", "C3")
+
+Seurat::FeaturePlot(
+  object = merged_se,
+  features = fibro_markers,
+  label = TRUE
+  )
+all_res
+```
+
+Deep dive in the nmSC
+*Next, we further analyzed the nmSC cluster. It highly transcribed a lipoprotein gene (Apod) (Fig. 1 D and E and SI Appendix, Table S2), that is known to be expressed in the PNS (19) in Schwann cells (20) with functions in SC–macrophage communication and promoting axonal regeneration (21, 22). The nmSC cluster also expressed ceruloplasmin (Cp) involved in copper metabolism and reported as a potential pan-SC marker (23). When we focused on receptors (Panther class: PC00197) we found that expression of the genes Matn2, Myoc, Hspg2/Perlecan, Col6a, and Lama2 in nmSCs was in accordance with their known expression and/or function in the PNS (24⇓⇓–27) (SI Appendix, Fig. S3B). Among transcription factors (TFs) (Panther class: PC00218), expression and/or function of Tcf4, Spry2, and Cebpd have been described in SCs (28⇓–30) (SI Appendix, Fig. S3B). Overall, this supports the assignment of the nmSC cluster to the SC lineage.*
+```{r}
+# Large scale
+Seurat::FeaturePlot(merged_se,
+                    features = c("Apod", # SCnm markers
+                                 "Cp", # SC markers
+                                 "Smoc2", # SCnm markers
+                                 "Ecm1", # SCnm markers
+                                 "S100b", # SC markers
+                                 "Mbp", # Myelin protein
+                                 "Plp1" # Myelin protein
+                                 ),
+                    pt.size = 0.5)
+```
+
+#### Cluster 11 resolution 0.5:
+Smooth muscle markers
+```{r}
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("Tagln",
+                                 "Acta2",
+                                 "Myl9",
+                                 "Tpm2"))
+
+Seurat::DimPlot(object = merged_se,
+                group.by = c("SCT_snn_res.0.5",
+                             "SCT_snn_res.0.05"),
+                label = TRUE)
+
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.5 == 14,
+  "Tumour-associated Schwann Cells",
+  merged_se$general_annot)
+
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.5 == 15,
+  "SMC",
+  merged_se$general_annot)
+```
+
+arterial Smooth muscle cells markers from [Single-cell RNA sequencing of mouse brain and lung vascular and vessel-associated cell types](https://www.nature.com/articles/sdata2018160)
+```{r}
+Seurat::FeaturePlot(object = merged_se[, merged_se$SCT_snn_res.0.25 == 8],
+                    features = c("Cbr2",
+                                 "Abra",
+                                 "Hctr1",
+                                 "Angpt4",
+                                 "Adcy5",
+                                 "Kcnh2",
+                                 "Adam33",
+                                 "Col6a1"))
+```
+
+## Cluster 2
+We can see how Cluster 2 expresses a lot of hemoglobin genes. 
+```{r}
+markers %>% dplyr::filter(cluster == 2)
+
+Seurat::FeaturePlot(object = merged_se,
+                    features = c("Hba-a1", "Hba-a2"),
+                    label = TRUE)
+
+# Seurat::FeaturePlot(merged_se, features = "pct_ribo", label = TRUE)
+# 
+# Seurat::VlnPlot(merged_se, features = c("pct_ribo", "pct_mt", "nCount_RNA"))
+
+merged_se[["general_annot"]] <- dplyr::if_else(
+  merged_se$SCT_snn_res.0.05 == 2,
+  "Erithrocytes",
+  merged_se$general_annot)
+```
+
+Extract common markers between both sub-clusters forming cluster 4
+```{r}
+markers_4_sp <- markers %>%
+  dplyr::filter(cluster == 4 & pct.1 > 0.75 & pct.2 < 0.5)
+
+genes_4 <- markers_4_sp %>% dplyr::pull(gene)
+Seurat::FeaturePlot(merged_se,
+                    features = genes_4[1:9])
+
+"{anot_28}/{robj_dir}/common_markers_SMC_nerve-associated-fibro.csv" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readr::write_csv(
+  x = markers_4_sp,
+  file = .)
+```
+
+#### Annotation 
+```{r}
+Seurat::DimPlot(object = merged_se,
+                group.by = "general_annot")
+```
+
+#### Cd36 expression by sample
+```{r}
+cd36_ls <- Seurat::FeaturePlot(
+  object = merged_se,
+  features = "Cd36",
+  slot = "data",
+  split.by = "orig.ident")
+
+nunique <- length(unique(merged_se$sample_id))
+purrr::map(seq_len(nunique),
+           ~ cd36_ls[[.]] +
+             theme(
+               plot.title = element_text(hjust = 0.5,
+                                         size = 12),
+               axis.text = element_text(size = 8),
+               axis.title  = element_text(size = 9)
+               )
+           ) %>% 
+  cowplot::plot_grid(plotlist = .,
+                     ncol = 3)
+```
+
+## Save General annotation
+```{r}
+"{anot_28}/{robj_dir}/harmony_se_general.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(
+    object = merged_se,
+    file = .)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```
