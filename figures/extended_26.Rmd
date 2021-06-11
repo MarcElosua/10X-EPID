@@ -1,0 +1,244 @@
+---
+author: "Marc Elosua-Bayes"
+title: "Extended Figure 26"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+In this Rmarkdown we are going to plot panels A, B & C.
+In this script we will use the Visium data coming from *spatial_analysis/05-sc_mapping/07-sc_mapping_viz.Rmd*.
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(glue)
+library(stringr)
+library(readr)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+set.seed(123)
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+
+"{fig_pt}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{fig_pt}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+img_order <- c("uzntl1_fkclxp", "k886qc_rqix54","s2yq8o_t5hk8u", "ivuznh_s8xyfv")
+
+SpatialColors <- colorRampPalette(colors = rev(x = brewer.pal(n = 11, name = "Spectral")))
+```
+
+## Load data
+Load Visium data
+```{r}
+# 07-sc_mapping_viz.Rmd
+# se_obj <- "{map_27}/{robj_dir}/se_deconv_{sample_id}_epid20_pre-rotation.rds"
+
+sp_ls <- lapply(id_sp_df$gem_id, function(id) {
+
+  se_obj <- "{map_27}/{robj_dir}/se_deconv_{id}_epid20.rds" %>%
+    glue::glue() %>%
+    here::here() %>%
+    readRDS(file = .)
+
+  return(se_obj)
+})
+
+se_obj <- merge(sp_ls[[1]], y = sp_ls[2:length(sp_ls)],
+                add.cell.ids = id_sp_df$gem_id,
+                project = "Gloria-Salva")
+```
+
+## Panels
+
+### Panel A
+In this panel we will show marker genes related to Glial and Glial progenitor on the Visium slide.
+
+```{r}
+feats_a <- c("mm10---S100b", "mm10---Scn7a", "mm10---Sox10")
+
+a_ls <- lapply(feats_a, function(feat) {
+  
+  tmp_row <- lapply(img_order, function(img) {
+    
+    tmp <- Seurat::SpatialPlot(
+      object = se_obj,
+      features = feat,
+      images = img,
+      image.alpha = 0,
+      crop = FALSE,
+      pt.size.factor = 1.25) &
+      ggplot2::scale_fill_gradientn(
+        colours = SpatialColors(n = 100),
+        limits = c(0, max(se_obj@assays$Spatial@data[feat, ])))
+    
+  }) %>%
+    ggpubr::ggarrange(
+      plotlist = .,
+      nrow = 1,
+      common.legend = TRUE,
+      legend = "right")
+  })
+```
+
+Join panel A
+```{r}
+panel_a <- cowplot::plot_grid(
+  plotlist = a_ls,
+  align = "hv",
+  axis = "trbl",
+  nrow = 3)
+
+panel_a
+
+"{fig_pt}/{plt_dir}/Extended_26-A.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = panel_a,
+    base_height = 10,
+    base_width = 15)
+```
+
+### Panel B
+In this panel we will show marker genes related to Perineuronal Net - ECM constituent on the Visium slide.
+
+```{r}
+feats_b <- c("mm10---Sulf1", "mm10---Has1", "mm10---Timp1", "mm10---Cspg4")
+
+b_ls <- lapply(feats_b, function(feat) {
+  
+  tmp_row <- lapply(img_order, function(img) {
+    
+    tmp <- Seurat::SpatialPlot(
+      object = se_obj,
+      features = feat,
+      images = img,
+      image.alpha = 0,
+      crop = FALSE,
+      pt.size.factor = 1.25) &
+      ggplot2::scale_fill_gradientn(
+        colours = SpatialColors(n = 100),
+        limits = c(0, max(se_obj@assays$Spatial@data[feat, ])))
+    
+  }) %>%
+    ggpubr::ggarrange(
+      plotlist = .,
+      nrow = 1,
+      common.legend = TRUE,
+      legend = "right")
+  })
+
+```
+
+Join panel B
+```{r}
+panel_b <- cowplot::plot_grid(
+  plotlist = b_ls,
+  align = "hv",
+  axis = "trbl",
+  nrow = 4)
+
+panel_b
+
+"{fig_pt}/{plt_dir}/Extended_26-B.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = panel_b,
+    base_height = 15,
+    base_width = 18)
+```
+
+### Panel C
+In this panel we will show marker genes related to Nerve injury and Pro-regenerative state on the Visium slide.
+
+```{r}
+feats_c <- c("mm10---Il33", "mm10---Ccl11", "mm10---Lpar1", "mm10---Enpp2")
+
+c_ls <- lapply(feats_c, function(feat) {
+  
+  tmp_row <- lapply(img_order, function(img) {
+    
+    tmp <- Seurat::SpatialPlot(
+      object = se_obj,
+      features = feat,
+      images = img,
+      image.alpha = 0,
+      crop = FALSE,
+      pt.size.factor = 1.25) &
+      ggplot2::scale_fill_gradientn(
+        colours = SpatialColors(n = 100),
+        limits = c(0, max(se_obj@assays$Spatial@data[feat, ])))
+    
+  }) %>%
+    ggpubr::ggarrange(
+      plotlist = .,
+      nrow = 1,
+      common.legend = TRUE,
+      legend = "right")
+  })
+
+```
+
+Join panel C
+```{r}
+panel_c <- cowplot::plot_grid(
+  plotlist = c_ls,
+  align = "hv",
+  axis = "trbl",
+  nrow = 4)
+
+panel_c
+
+"{fig_pt}/{plt_dir}/Extended_26-C.svg" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = panel_c,
+    base_height = 15,
+    base_width = 18)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

@@ -38,21 +38,28 @@ Loading necessary paths and parameters
 ```{r}
 source(here::here("misc/paths.R"))
 source(here::here("utils/bin.R"))
-plt_dir <- sprintf("%s/%s", qc_27, plt_dir)
-robj_dir <- sprintf("%s/%s", qc_27, robj_dir)
 
-dir.create(path = here::here(plt_dir),
-           showWarnings = FALSE,
-           recursive = TRUE)
+"{qc_27}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
 
-dir.create(path = here::here(robj_dir),
-           showWarnings = FALSE,
-           recursive = TRUE)
+"{qc_27}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
 ```
 
 ```{r}
 sample_id <- params$sample_id
 # sample_id <- "s2yq8o_t5hk8u"
+
 # THRESHOLDS
 # min_lib_size <- 500
 # min_n_genes <- 50
@@ -67,8 +74,7 @@ min_cells <- qc_dict[[sample_id]][["min_cells"]]
 ## Load data
 We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
 ```{r}
-spaceranger_data <- sprintf("%s/%s/outs",
-                           spaceranger, sample_id)
+spaceranger_data <- glue::glue("{spaceranger}/{sample_id}/outs")
 
 se_obj <- Seurat::Load10X_Spatial(data.dir = here::here(spaceranger_data),
                                   filename = "filtered_feature_bc_matrix.h5",
@@ -168,35 +174,15 @@ Seurat::SpatialFeaturePlot(object = se_obj,
 
 
 ## Filtering spots
-```{r}
-if (sample_id == "s2yq8o_t5hk8u") {
-  qc_message <- "We need to filter out spots overlapping the tissue."
-} else {
-  qc_message <- "No need to fitler out any bad quality spots."
-  }
-```
-
-`r qc_message`
-
-```{r eval = FALSE}
-if (sample_id == "s2yq8o_t5hk8u") {
-  readr::read_table(file = here::here(glue::glue("{qc_27}/{robj_dir}/")))
-  coord <- se_obj@images$s2yq8o_t5hk8u@coordinates[, c("imagerow", "imagecol")]
-  
-  mask <- which(coord$imagerow > 200 & coord$imagerow < 3000)
-  keep_spots <- rownames(coord[mask, ])
-  se_obj <- se_obj[, keep_spots]
-  
-  plotly::plot_ly(coord, x = ~imagecol, y = ~imagerow)
-}
-```
+No need to fitler out any bad quality spots.
 
 ## Save RDS
 Save the object to use downstream.
 ```{r}
-saveRDS(object = se_obj,
-        file = here::here(sprintf("%s/qc_se_%s.rds",
-                                  robj_dir, sample_id)))
+"{qc_27}/{robj_dir}/qc_se_{sample_id}.RDS" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(object = se_obj, file = .)
 ```
 
 ## Session Info

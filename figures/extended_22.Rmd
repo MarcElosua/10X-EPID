@@ -1,0 +1,102 @@
+---
+author: "Marc Elosua-Bayes"
+title: "Extended Figure 22-A"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
+                      message = FALSE, warning = FALSE)
+options(width = 1200)
+```
+
+## Introduction
+In this Rmarkdown we are going to plot panels D, G & H.
+In this script we will use the the scRNAseq data from *sc_analysis/04-annotation/07-join_annotation.Rmd*.
+
+## Libraries
+
+```{r}
+library(Seurat)
+library(ggpubr)
+library(cowplot)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(glue)
+library(stringr)
+library(readr)
+```
+
+## Setting parameters
+Loading necessary paths and parameters
+```{r}
+set.seed(123)
+source(here::here("misc/paths.R"))
+source(here::here("utils/bin.R"))
+
+"{fig_pt}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+
+"{fig_pt}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
+```
+
+## Load data
+Load scRNAseq data
+```{r}
+# *sc_analysis/04-annotation/07-join_annotation.Rmd
+sc_obj <- "{anot_28}/{robj_dir}/harmony_se_annot.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
+```
+
+## Panels
+
+### Panel A
+In this panel we show the UMAP with the genes of interest for the cell identities we recovered.
+
+```{r fig.width=15, fig.height=15}
+feats <- c("Krt14", "Krt5", "Top2a", "Mki67", "Ccl21a", "Lyve1", "Flt1",
+           "Vcam1", "Apod", "Ecm1", "Tagln", "Acta2", "Hba-a1", "Hbb-bt")
+
+panel_a <- Seurat::FeaturePlot(
+  object = sc_obj,
+  features = c(feats)) &
+  ggplot2::scale_color_gradient(low = "#FFFF80FF",
+                              high = "#FF0000FF")
+
+panel_a
+
+"{fig_pt}/{plt_dir}/Extended_22-A.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = panel_a,
+    base_height = 15,
+    base_width = 15)
+```
+
+## Session Info
+```{r}
+sessionInfo()
+```

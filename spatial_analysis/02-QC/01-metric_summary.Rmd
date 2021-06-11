@@ -6,7 +6,6 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_knit$set(root.dir = "../..")
 knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
                       message = FALSE, warning = FALSE)
 options(width = 1200)
@@ -32,15 +31,15 @@ library(stringr)
 ## Parameters
 Loading necessary paths and parameters
 ```{r}
-source("misc/paths.R")
+source(here::here("misc/paths.R"))
 plt_dir <- sprintf("%s/%s", qc_27, plt_dir)
 robj_dir <- sprintf("%s/%s", qc_27, robj_dir)
 
-dir.create(path = plt_dir,
+dir.create(path = here::here(plt_dir),
            showWarnings = FALSE,
            recursive = TRUE)
 
-dir.create(path = robj_dir,
+dir.create(path = here::here(robj_dir),
            showWarnings = FALSE,
            recursive = TRUE)
 ```
@@ -50,11 +49,11 @@ dir.create(path = robj_dir,
 We have 4 different datasets, 1 for each capture area.
 ```{r}
 # Load ID matcher
-id_df <- readr::read_csv("spatial_analysis/01-spaceranger/data/sample_id.txt")
+id_df <- readr::read_csv(here::here("spatial_analysis/01-spaceranger/data/sample_id.txt"))
 
 qcmetric_df <- lapply(sp_id_ls, function(id) {
-  tmp_df <- readr::read_csv(file = sprintf("%s/%s/outs/metrics_summary.csv",
-                                           spaceranger, id))
+  tmp_df <- readr::read_csv(file = here::here(sprintf("%s/%s/outs/metrics_summary.csv",
+                                           spaceranger, id)))
   tmp_df <- tmp_df %>%
     dplyr::mutate(sample_id = id_df[id_df$gem_id == id, ] %>% pull(donor_id))
   
@@ -120,16 +119,21 @@ Secondly, we will assess the quality of cellranger's mapping by comparing the pe
 ```{r fig.wide=TRUE, fig.height=12}
 # Reads mapped to genome and transcriptome
 mapping_qc_vars <- c(
-  "Reads_Mapped_Confidently_to_Genome",
-  "Reads_Mapped_Confidently_to_Intergenic_Regions",
-  "Reads_Mapped_Confidently_to_Intronic_Regions",
-  "Reads_Mapped_Confidently_to_Exonic_Regions"
+  "Reads_Mapped_to_Genome_(mm10)",
+  "Reads_Mapped_Confidently_to_Intergenic_Regions_(mm10)",
+  "Reads_Mapped_Confidently_to_Intronic_Regions_(mm10)",
+  "Reads_Mapped_Confidently_to_Exonic_Regions_(mm10)",
+  "Reads_Mapped_to_Genome_(GRCh38)",
+  "Reads_Mapped_Confidently_to_Intergenic_Regions_(GRCh38)",
+  "Reads_Mapped_Confidently_to_Intronic_Regions_(GRCh38)",
+  "Reads_Mapped_Confidently_to_Exonic_Regions_(GRCh38)"
 )
 
-mapping_qc_gg <- purrr::map(mapping_qc_vars, function(var) {
+mapping_qc_gg <- purrr::map(mapping_qc_vars , function(var) {
   qcmetric_df <- qcmetric_df %>%
   dplyr::mutate(
-    var_int = stringr::str_remove(string = qcmetric_df %>% dplyr::pull(all_of(var)),
+    var_int = stringr::str_remove(string = qcmetric_df %>%
+                                    dplyr::pull(all_of(var)),
                               pattern = "%"),
     var_int = as.numeric(var_int)
   )
@@ -157,12 +161,14 @@ mapping_qc_arr
 Thirdly, we will plot the number of detected genes per library as a function of the total reads sequenced. We know that this function reaches a plateau, whereby more sequenced reads does not result in more detected genes. In those scenarios, we say that we have sequenced until saturation:
 
 ```{r fig.width = 8, fig.height = 6}
-selected_qc <- qcmetric_df[qcmetric_df$Total_Genes_Detected < 20000, ]
+selected_qc <- qcmetric_df[qcmetric_df$`Total_Genes_Detected_(GRCh38)` + 
+                             qcmetric_df$`Total_Genes_Detected_(mm10)` < 20000, ]
 
 num_genes_vs_total_reads <- qcmetric_df %>%
+  dplyr::mutate(Total_Genes_Detected = `Total_Genes_Detected_(GRCh38)` + `Total_Genes_Detected_(mm10)`) %>%
   ggplot(aes(Number_of_Reads, Total_Genes_Detected, color = sample_id)) +
     geom_point() +
-    geom_text_repel(data = selected_qc, aes(label = sample_id), color = "black") +
+    # geom_text_repel(data = selected_qc, aes(label = sample_id), color = "black") +
     # scale_color_manual("", values = cols) +
     labs(x = "Number of Reads", y = "Total Genes Detected", color = "") +
     theme_classic() +

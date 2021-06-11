@@ -2,61 +2,64 @@
 ver <- "2020-09-22"
 
 ## PATHS and common variables
-version_dir <- sprintf("%s",ver)
+version_dir <- glue::glue("{ver}")
 
 ## Create directory for plots
-plt_dir <- sprintf("%s/plots_%s", ver, ver) 
+plt_dir <- glue::glue("{ver}/plots_{ver}") 
 
 ## Create directory for RDS objects
-robj_dir <- sprintf("%s/R_objects_%s", ver, ver)
+robj_dir <- glue::glue("{ver}/R_objects_{ver}")
 
 ## Paths to all the folders
 an_27 <- "spatial_analysis"
 an_28 <- "sc_analysis"
 
 ## SC paths
-qc_28 <- sprintf("%s/02-QC", an_28)
-clust_28 <- sprintf("%s/03-integration_clustering", an_28)
-anot_28 <- sprintf("%s/04-annotation", an_28)
-palm_28 <- sprintf("%s/05-palm_comparison", an_28)
+qc_28 <- glue::glue("{an_28}/02-QC")
+clust_28 <- glue::glue("{an_28}/03-integration_clustering")
+anot_28 <- glue::glue("{an_28}/04-annotation")
+palm_28 <- glue::glue("{an_28}/05-palm_comparison")
 
 
 ## SP paths
-qc_27 <- sprintf("%s/02-QC", an_27)
-clust_27 <- sprintf("%s/03-Clustering", an_27)
-anot_27 <- sprintf("%s/04-annotation", an_27)
+qc_27 <- glue::glue("{an_27}/02-QC")
+clust_27 <- glue::glue("{an_27}/03-Clustering")
+anot_27 <- glue::glue("{an_27}/04-annotation")
 # Variables
 ver <- "2020-09-22"
 
 ## PATHS and common variables
-version_dir <- sprintf("%s",ver)
+version_dir <- glue::glue("{ver}")
 
 ## Create directory for plots
-plt_dir <- sprintf("%s/plots_%s", ver, ver) 
+plt_dir <- glue::glue("{ver}/plots_{ver}") 
 
 ## Create directory for RDS objects
-robj_dir <- sprintf("%s/R_objects_%s", ver, ver)
+robj_dir <- glue::glue("{ver}/R_objects_{ver}")
 
 ## Paths to all the folders
 an_27 <- "spatial_analysis"
 an_28 <- "sc_analysis"
 
 ## SC paths
-qc_28 <- sprintf("%s/02-QC", an_28)
-clust_28 <- sprintf("%s/03-integration_clustering", an_28)
-anot_28 <- sprintf("%s/04-annotation", an_28)
-palm_28 <- sprintf("%s/05-palm_comparison", an_28)
+qc_28 <- glue::glue("{an_28}/02-QC")
+clust_28 <- glue::glue("{an_28}/03-integration_clustering")
+anot_28 <- glue::glue("{an_28}/04-annotation")
+palm_28 <- glue::glue("{an_28}/05-palm_comparison")
 
 
 ## SP paths
-qc_27 <- sprintf("%s/02-QC", an_27)
-clust_27 <- sprintf("%s/03-Clustering", an_27)
-anot_27 <- sprintf("%s/04-annotation", an_27)
-map_27 <- sprintf("%s/05-sc_mapping", an_27)
+qc_27 <- glue::glue("{an_27}/02-QC")
+clust_27 <- glue::glue("{an_27}/03-Clustering")
+anot_27 <- glue::glue("{an_27}/04-annotation")
+map_27 <- glue::glue("{an_27}/05-sc_mapping")
+
+## Figures paths
+fig_pt <- "figures"
 
 ## Paths to data
-cell_ranger <- sprintf("%s/01-cellranger/results", an_28)
-spaceranger <- sprintf("%s/01-spaceranger/results", an_27)
+cell_ranger <- glue::glue("{an_28}/01-cellranger/results")
+spaceranger <- glue::glue("{an_27}/01-spaceranger/results")
 filtered_mtrx <- "outs/filtered_feature_bc_matrix"
 
 # Single cell ID
@@ -65,7 +68,10 @@ id_df <- readr::read_csv(file = here::here(glue::glue("{cell_ranger}/epid_sc_met
 id_ls <- c("qsbh45_pccb6n", "k8uz5b_fjwlh2", "btlfxa_fff3je", "pvnq5v_ew78kc")
 
 # Spatial ID
-id_sp_df <- readr::read_csv(file = here::here(glue::glue("{an_27}/01-spaceranger/data/sample_id.txt")))
+id_sp_df <- "{an_27}/01-spaceranger/data/sample_id.txt" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readr::read_csv(file = .)
 
 id_sp_ls <- id_sp_df$gem_id
 

@@ -134,6 +134,6 @@ for direct in [subproject_dir, fastq_dir, output_dir]:
 
 # Create spaceranger script
 if len(metadata_df) == 1:
-    make_spaceranger(subproject_dir, metadata_df, spaceranger, reference_path)
+    make_spaceranger_clustermode(subproject_dir, metadata_df, spaceranger, reference_path)
 else:
     print("metadata_fd has number of rows != 1; {}".format(len(metadata_df)))

@@ -122,7 +122,6 @@ se_obj@meta.data <- metadata
 Save the seurat object with the Cell type scores
 ```{r eval=FALSE}
 "{map_27}/{robj_dir}/se_deconv_{sample_id}_epid20.rds" %>%
-# "{map_27}/{robj_dir}/se_deconv_{sample_id}.rds" %>%
   glue::glue() %>%
   here::here() %>%
   saveRDS(
@@ -132,7 +131,17 @@ Save the seurat object with the Cell type scores
 
 ### Visualization
 ```{r}
-Seurat::SpatialFeaturePlot(object = se_obj,features = "Tumour-associated Schwann Cells")
+Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = "Tumour-associated Schwann Cells",
+  alpha = c(0, 1))
+
+
+Seurat::SpatialDimPlot(
+  object = se_obj,
+  group.by = "Spatial_snn_res.0.1",
+  alpha = c(0, 1),
+  pt.size.factor = 2)
 ```
 
 ### % mouse vs prop. of Schwann cells

@@ -10,7 +10,7 @@ declare -A id_dict=( \
   ["s2yq8o_t5hk8u"]="GP024_dKDCD36_Palm_Diet")
 
 # ivuznh_s8xyfv k886qc_rqix54 s2yq8o_t5hk8u uzntl1_fkclxp
-for id in ivuznh_s8xyfv k886qc_rqix54 s2yq8o_t5hk8u uzntl1_fkclxp 
+for id in s2yq8o_t5hk8u 
 do
 # Get the donor id in human form
 donor_id=${id_dict[${id}]}

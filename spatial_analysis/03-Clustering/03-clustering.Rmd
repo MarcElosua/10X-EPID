@@ -7,10 +7,6 @@ params:
 title: "`r sprintf('%s Clustering', params$sample_id)`"
 ---
 
----
-title: `r params$sample_id`
----
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, out.width = "100%", fig.align='center', 
                       message = FALSE, warning = FALSE)
@@ -39,26 +35,36 @@ Loading necessary paths and parameters
 source(here::here("misc/paths.R"))
 source(here::here("utils/bin.R"))
 
-dir.create(path = here::here(sprintf("%s/%s", clust_27, plt_dir)),
-           showWarnings = FALSE,
-           recursive = TRUE)
+"{clust_27}/{plt_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
 
-dir.create(path = here::here(sprintf("%s/%s", clust_27, robj_dir)),
-           showWarnings = FALSE,
-           recursive = TRUE)
+"{clust_27}/{robj_dir}" %>%
+  glue::glue() %>%
+  here::here() %>%
+  dir.create(
+    path = .,
+    showWarnings = FALSE,
+    recursive = TRUE)
 ```
 
 ```{r}
-sample_id <- params$sample_id
+# sample_id <- params$sample_id
+sample_id <- "s2yq8o_t5hk8u"
 donor_id <- qc_dict[[sample_id]][["sample_id"]]
-# sample_id <- "s2yq8o_t5hk8u"
 ```
 
 ## Load data
 We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
 ```{r}
-se_obj <- readRDS(file = here::here(sprintf("%s/%s/qc_se_%s.rds",
-                                            qc_27, robj_dir, sample_id)))
+se_obj <- "{qc_27}/{robj_dir}/qc_se_{sample_id}.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  readRDS(file = .)
 ```
 
 ## Analysis
@@ -111,13 +117,14 @@ Seurat::SpatialDimPlot(object = se_obj,
 
 ## Save object
 ```{r}
-saveRDS(object = se_obj,
-        file = here::here(sprintf("%s/%s/clust_se_%s.RDS",
-                                  clust_27, robj_dir, sample_id)))
+"{clust_27}/{robj_dir}/clust_se_{sample_id}.rds" %>%
+  glue::glue() %>%
+  here::here() %>%
+  saveRDS(object = se_obj, file = .)
 ```
 
 We are also going to save the files to be used in the shiny app. We can find the *seurat2shiny* function [here](https://github.com/Single-Cell-Genomics-Group-CNAG-CRG/shiny-annotation/blob/main/seurat2shiny.R)
-```{r}
+```{r eval=FALSE}
 seurat2shiny = function(
     object                         ,
     tech      = c("sc", "sp")      ,
@@ -197,7 +204,7 @@ seurat2shiny = function(
 }
 ```
 
-```{r}
+```{r eval=FALSE}
 list_shiny <- seurat2shiny(object = se_obj,
                            tech = "sp",
                            image = sample_id,

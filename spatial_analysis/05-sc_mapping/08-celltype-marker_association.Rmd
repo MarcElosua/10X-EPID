@@ -41,7 +41,7 @@ library(SPOTlight)
 library(ggcorrplot)
 library(reticulate)
 
-# path_to_python <- "~/anaconda3/envs/MAGIC"
+# path_to_python <- "/media/data1/anaconda3/envs/MAGIC"
 path_to_python <- "/scratch/groups/hheyn/software/anaconda3/envs/MAGIC/"
 # reticulate::use_python(path_to_python, required = TRUE)
 reticulate::use_condaenv(path_to_python)
@@ -78,6 +78,7 @@ source(here::here("utils/bin.R"))
 sample_id <- params$sample_id
 # sample_id <- "uzntl1_fkclxp"
 # sample_id <- "k886qc_rqix54"
+# sample_id <- "s2yq8o_t5hk8u"
 donor_id <- qc_dict[[sample_id]][["sample_id"]]
 ```
 
@@ -85,6 +86,7 @@ donor_id <- qc_dict[[sample_id]][["sample_id"]]
 We have 4 different datasets that we are going to analyze separately. In each Rmarkdown notebook we analyze 1 dataset.
 ```{r}
 # 07-sc_mapping_viz.Rmd
+# se_obj <- "{map_27}/{robj_dir}/se_deconv_{sample_id}_epid20_pre-rotation.rds" %>%
 se_obj <- "{map_27}/{robj_dir}/se_deconv_{sample_id}_epid20.rds" %>%
   glue::glue() %>%
   here::here() %>%
@@ -98,6 +100,14 @@ sc_obj <- "{anot_28}/{robj_dir}/harmony_se_annot.rds" %>%
 ```
 
 ## Analysis
+
+```{r}
+Seurat::SpatialDimPlot(se_obj, group.by = c("Spatial_snn_res.0.1",
+                                            "Spatial_snn_res.0.3",
+                                            "Spatial_snn_res.0.5",
+                                            "Spatial_snn_res.0.75",
+                                            "Spatial_snn_res.1"))
+```
 
 ### % mouse vs prop. of Schwann cells
 ```{r fig.width=5, fig.height=5}
@@ -331,16 +341,15 @@ if (sample_id == "uzntl1_fkclxp") {
     se_obj@meta.data <- se_obj@meta.data %>%
       dplyr::mutate(
         stratification = dplyr::case_when(
-          Spatial_snn_res.0.5 %in% c(5, 6) ~ "Tumour",
-          Spatial_snn_res.0.5 == 4 ~ "Tumour Front",
+          # Spatial_snn_res.0.5 %in% c(5, 6) ~ "Tumour",
+          Spatial_snn_res.0.1 == 2 ~ "Tumour",
+          Spatial_snn_res.0.1 == 1 ~ "Tumour Front",
           TRUE ~ "Healthy"
           ),
         stratification = factor(stratification,
                                 levels = c("Healthy", "Tumour Front", "Tumour"))
         )
 }
-
-
 
 my_comparisons <- list(
     c("Tumour", "Tumour Front"),
@@ -387,14 +396,29 @@ strat_plt <- ggplot2::ggplot(
     base_width = 9)
 
 strat_plt
-
-Seurat::SpatialFeaturePlot(
-  object = se_obj,
-  features = c("Tumour-associated Schwann Cells", "percent.mouse")) +
-  Seurat::SpatialDimPlot(
-    object = se_obj,
-    group.by = "stratification")
 ```
+
+Visualization in space
+```{r}
+joint_plt1 <- Seurat::SpatialFeaturePlot(
+  object = se_obj,
+  features = c("Tumour-associated Schwann Cells", "percent.mouse"))
+
+joint_plt2 <- Seurat::SpatialDimPlot(
+    object = se_obj,
+    group.by = "stratification") +
+  ggplot2::theme(legend.position = "top")
+
+"{map_27}/{plt_dir}/extended-25_B_{donor_id}_schwann.pdf" %>%
+  glue::glue() %>%
+  here::here() %>%
+  cowplot::save_plot(
+    filename = .,
+    plot = joint_plt1 + joint_plt2,
+    base_height = 5,
+    base_width = 15)
+```
+
 
 ## Session Info
 ```{r}

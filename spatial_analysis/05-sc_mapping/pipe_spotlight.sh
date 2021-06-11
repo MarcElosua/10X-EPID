@@ -12,7 +12,8 @@ declare -A id_dict=( \
   ["ivuznh_s8xyfv"]="GP20004_dKDCD36_CT_Diet" \
   ["s2yq8o_t5hk8u"]="GP024_dKDCD36_Palm_Diet")
 
-for spatial in uzntl1_fkclxp k886qc_rqix54 ivuznh_s8xyfv s2yq8o_t5hk8u
+# uzntl1_fkclxp k886qc_rqix54 ivuznh_s8xyfv s2yq8o_t5hk8u
+for spatial in s2yq8o_t5hk8u
 do
 
 # Get the donor id in human form
